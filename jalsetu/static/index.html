@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JalSetu</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--navy:#0c2239;--teal:#1d7494;--cyan:#00a8c6;--bg:#eaf3f8;--amber:#f0a030;--ok:#1e9e5a;--bad:#d64545}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--navy)}
+header{background:var(--navy);color:#fff;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:1000}
+header h1{margin:0;font-size:20px;font-family:Georgia,serif}header h1 span{color:var(--cyan)}
+header small{opacity:.8;margin-right:8px}
+button,.btn{background:var(--teal);color:#fff;border:0;border-radius:8px;padding:9px 14px;font-size:14px;cursor:pointer}
+button.alt{background:#fff;color:var(--teal);border:1px solid var(--teal)}button.bad{background:var(--bad)}button.ok{background:var(--ok)}
+button:disabled{opacity:.5}
+nav{display:flex;gap:4px;padding:8px;background:#fff;overflow-x:auto;position:sticky;top:48px;z-index:999;border-bottom:1px solid #d5e4ec}
+nav button{background:transparent;color:var(--navy);white-space:nowrap}nav button.on{background:var(--teal);color:#fff}
+main{max-width:1000px;margin:0 auto;padding:10px}
+.card{background:#fff;border-radius:12px;padding:12px;margin:8px 0;box-shadow:0 1px 3px #0001}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.row>*{flex:1 1 120px}
+input,select,textarea{width:100%;padding:9px;border:1px solid #b9cfdb;border-radius:8px;font-size:14px;background:#fff}
+label{font-size:12px;color:var(--teal);font-weight:600;display:block;margin:6px 0 2px}
+#map{height:320px;border-radius:12px;z-index:1}
+.tag{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;background:#dcecf3;color:var(--teal);margin-right:4px}
+.tag.g{background:#d9f3e5;color:var(--ok)}.tag.r{background:#fbe0e0;color:var(--bad)}.tag.a{background:#fdeccf;color:#b0700a}
+.price{font-size:20px;font-weight:700}.muted{color:#5d7a8c;font-size:13px}
+.sup{display:flex;justify-content:space-between;gap:8px;cursor:pointer}
+dialog{border:0;border-radius:14px;max-width:460px;width:94%;padding:16px}dialog::backdrop{background:#0008}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--navy);color:#fff;padding:10px 16px;border-radius:10px;display:none;z-index:3000}
+.hide{display:none}
+</style>
+</head>
+<body>
+<header><h1>Jal<span>Setu</span></h1><div><small id="who"></small><button class="alt" id="authBtn">Sign in</button></div></header>
+<nav id="nav"></nav>
+<main id="view"></main>
+<div id="toast"></div>
+
+<dialog id="authDlg"><form method="dialog" id="authForm">
+  <h3 id="authTitle">Sign in</h3>
+  <div id="regOnly" class="hide"><label>Name</label><input id="aName"><label>I am a</label>
+    <select id="aRole"><option value="user">Customer</option><option value="supplier">Supplier</option></select></div>
+  <label>Phone</label><input id="aPhone" inputmode="tel"><label>Password</label><input id="aPass" type="password">
+  <p class="muted" id="demoHint">Demo: customer 9000000001 / demo123 · supplier 9000000100 / supplier123 · admin / admin123</p>
+  <div class="row"><button type="button" id="authGo">Continue</button><button type="button" class="alt" id="authSwitch">Create account</button><button type="button" class="alt" id="authClose">Close</button></div>
+</form></dialog>
+
+<dialog id="supDlg"><div id="supBody"></div></dialog>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+let token=localStorage.jstoken||null,user=JSON.parse(localStorage.jsuser||"null");
+let loc={lat:22.5645,lng:88.3951,label:"Beliaghata (default)"},tab="discover",map,markers,regMode=false;
+
+function toast(m){const t=$("#toast");t.textContent=m;t.style.display="block";clearTimeout(t._t);t._t=setTimeout(()=>t.style.display="none",2600)}
+async function api(path,opt={}){
+  const r=await fetch("/api"+path,{method:opt.method||"GET",headers:{"Content-Type":"application/json",...(token?{Authorization:"Bearer "+token}:{})},body:opt.body?JSON.stringify(opt.body):undefined});
+  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||"Request failed");return j}
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const stars=r=>r?`★ ${r}`:"No ratings";
+
+/* auth */
+function setAuth(t,u){token=t;user=u;if(t){localStorage.jstoken=t;localStorage.jsuser=JSON.stringify(u)}else{localStorage.removeItem("jstoken");localStorage.removeItem("jsuser")}renderChrome();go("discover")}
+$("#authBtn").onclick=()=>{if(user){setAuth(null,null)}else{regMode=false;authUI();$("#authDlg").showModal()}};
+$("#authClose").onclick=()=>$("#authDlg").close();
+$("#authSwitch").onclick=()=>{regMode=!regMode;authUI()};
+function authUI(){$("#authTitle").textContent=regMode?"Create account":"Sign in";$("#regOnly").classList.toggle("hide",!regMode);$("#authSwitch").textContent=regMode?"I have an account":"Create account"}
+$("#authGo").onclick=async()=>{try{
+  const body={phone:$("#aPhone").value,password:$("#aPass").value};
+  if(regMode){body.name=$("#aName").value;body.role=$("#aRole").value}
+  const j=await api(regMode?"/register":"/login",{method:"POST",body});$("#authDlg").close();setAuth(j.token,j.user);toast("Welcome, "+j.user.name)}catch(e){toast(e.message)}};
+
+function renderChrome(){
+  $("#who").textContent=user?`${user.name} (${user.role})`:"";$("#authBtn").textContent=user?"Sign out":"Sign in";
+  const tabs=[["discover","Discover"]];
+  if(user){tabs.push(["orders","My Requests"]);if(user.role==="supplier")tabs.push(["dash","Supplier Dashboard"]);if(user.role==="admin")tabs.push(["admin","Admin"])}
+  $("#nav").innerHTML=tabs.map(([k,l])=>`<button data-k="${k}" class="${k===tab?"on":""}">${l}</button>`).join("");
+  $("#nav").querySelectorAll("button").forEach(b=>b.onclick=()=>go(b.dataset.k))}
+function go(t){tab=t;renderChrome();({discover,orders,dash,admin})[t]()}
+
+/* discover */
+function discover(){
+  $("#view").innerHTML=`
+  <div class="card"><div class="row">
+    <div style="flex:2 1 200px"><label>Search name / area</label><input id="fq" placeholder="e.g. Tangra"></div>
+    <div><label>Max distance (km)</label><select id="fkm"><option value="">Any</option><option>1</option><option selected>3</option><option>5</option><option>10</option></select></div>
+    <div><label>Max price (₹)</label><input id="fp" type="number" placeholder="Any"></div>
+    <div><label>Sort</label><select id="fs"><option value="distance">Nearest</option><option value="price">Cheapest</option></select></div>
+    <div><label>&nbsp;</label><label style="display:flex;gap:6px;align-items:center;margin:0"><input id="fa" type="checkbox" style="width:auto"> In stock only</label></div>
+  </div>
+  <div class="row" style="margin-top:8px"><span class="muted" id="locLbl" style="flex:3 1 200px"></span><button class="alt" id="locBtn">📍 Use my location</button></div></div>
+  <div id="map"></div><div id="list"></div>`;
+  map=L.map("map").setView([loc.lat,loc.lng],14);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(map);
+  markers=L.layerGroup().addTo(map);
+  map.on("click",e=>{loc={lat:e.latlng.lat,lng:e.latlng.lng,label:"Picked on map"};load()});
+  ["fq","fkm","fp","fs","fa"].forEach(i=>$("#"+i).addEventListener("input",load));
+  $("#locBtn").onclick=()=>navigator.geolocation?navigator.geolocation.getCurrentPosition(p=>{loc={lat:p.coords.latitude,lng:p.coords.longitude,label:"Your location"};map.setView([loc.lat,loc.lng],14);load()},()=>toast("Location blocked. Tap the map to choose an area.")):toast("Location unavailable");
+  load()}
+let me_marker;
+async function load(){
+  $("#locLbl").textContent="Searching near: "+loc.label+" (tap map to change)";
+  const p=new URLSearchParams({lat:loc.lat,lng:loc.lng,sort:$("#fs").value});
+  if($("#fq").value)p.set("q",$("#fq").value);if($("#fkm").value)p.set("max_km",$("#fkm").value);if($("#fp").value)p.set("max_price",$("#fp").value);if($("#fa").checked)p.set("available","1");
+  const rows=await api("/suppliers?"+p);
+  markers.clearLayers();me_marker&&map.removeLayer(me_marker);
+  me_marker=L.circleMarker([loc.lat,loc.lng],{radius:8,color:"#f0a030",fillOpacity:.9}).addTo(map).bindTooltip("You");
+  rows.forEach(s=>L.marker([s.lat,s.lng]).addTo(markers).bindTooltip(`${s.business_name} · ₹${s.price}`).on("click",()=>openSup(s.id)));
+  $("#list").innerHTML=rows.length?rows.map(s=>`<div class="card sup" onclick="openSup(${s.id})"><div>
+    <b>${esc(s.business_name)}</b><div class="muted">${esc(s.service_area)}</div>
+    <div style="margin-top:6px"><span class="tag ${s.availability?"g":"r"}">${s.availability?"Available":"Out of stock"}</span><span class="tag">${s.distance_km} km</span><span class="tag a">${stars(s.rating)} (${s.review_count})</span></div></div>
+    <div style="text-align:right"><div class="price">₹${s.price}</div><div class="muted">${s.delivery_charge?`+₹${s.delivery_charge} delivery`:"Free delivery"}</div></div></div>`).join(""):`<div class="card muted">No suppliers match. Try a wider distance or clear filters.</div>`}
+
+async function openSup(id){
+  const s=await api("/suppliers/"+id);
+  $("#supBody").innerHTML=`<h3 style="margin-top:0">${esc(s.business_name)}</h3>
+  <span class="tag ${s.availability?"g":"r"}">${s.availability?"Available":"Out of stock"}</span><span class="tag">Verified ✓</span>
+  <p><b>${s.jar_size} jar: ₹${s.price}</b> · ${s.delivery_charge?`₹${s.delivery_charge} delivery`:"Free delivery"}</p>
+  <p class="muted">Service area: ${esc(s.service_area)}<br>Address: ${esc(s.address)}<br>Phone: <a href="tel:${esc(s.contact)}">${esc(s.contact)}</a></p>
+  <div class="row"><a class="btn" style="text-align:center;text-decoration:none" href="tel:${esc(s.contact)}">📞 Call</a><button id="reqBtn" ${s.availability?"":"disabled"}>Request delivery</button><button class="alt" onclick="$('#supDlg').close()">Close</button></div>
+  <div id="reqForm" class="hide"><label>Jars</label><input id="rq" type="number" value="1" min="1" max="50"><label>Delivery address</label><textarea id="ra" rows="2"></textarea><label>Note (optional)</label><input id="rn"><br><br><button id="rGo" class="ok">Confirm request</button></div>
+  <h4>Reviews (${stars(s.rating)})</h4>${s.reviews.map(r=>`<div class="muted"><b>${esc(r.name)}</b> ★${r.rating} ${esc(r.comment)}</div>`).join("")||'<div class="muted">No reviews yet</div>'}`;
+  $("#supDlg").showModal();
+  $("#reqBtn").onclick=()=>{if(!user){$("#supDlg").close();toast("Please sign in to request delivery");$("#authBtn").click();return}$("#reqForm").classList.toggle("hide")};
+  $("#rGo")&&($("#rGo").onclick=async()=>{try{await api("/orders",{method:"POST",body:{supplier_id:id,qty:+$("#rq").value,address:$("#ra").value,note:$("#rn").value}});$("#supDlg").close();toast("Request sent!");go("orders")}catch(e){toast(e.message)}})}
+
+/* orders */
+const stTag=s=>`<span class="tag ${s==="delivered"?"g":["rejected","cancelled"].includes(s)?"r":"a"}">${s.replace(/_/g," ")}</span>`;
+async function orders(){
+  const rows=await api("/orders");
+  $("#view").innerHTML=`<h3>My delivery requests</h3>`+(rows.map(o=>`<div class="card"><div class="sup"><b>${esc(o.business_name)}</b>${stTag(o.status)}</div>
+   <div class="muted">${o.qty} jar(s) · ₹${o.total} · ${new Date(o.ts*1000).toLocaleString()}<br>${esc(o.address)}</div>
+   <div class="row" style="margin-top:6px">${o.status==="pending"?`<button class="bad" onclick="setSt(${o.id},'cancelled','orders')">Cancel</button>`:""}
+   ${o.status==="delivered"?`<button class="alt" onclick="rate(${o.supplier_id})">Rate supplier</button>`:""}<a class="btn alt" style="text-align:center;text-decoration:none" href="tel:${esc(o.contact)}">📞 Call</a></div></div>`).join("")||'<div class="card muted">No requests yet. Find a supplier on the Discover tab.</div>')}
+async function setSt(id,status,back){try{await api("/orders/"+id,{method:"PATCH",body:{status}});toast("Updated");go(back)}catch(e){toast(e.message)}}
+async function rate(sid){const r=prompt("Rating 1-5?");if(!r)return;const c=prompt("Comment (optional)")||"";try{await api(`/suppliers/${sid}/reviews`,{method:"POST",body:{rating:+r,comment:c}});toast("Thanks for rating")}catch(e){toast(e.message)}}
+
+/* supplier dashboard */
+async function dash(){
+  const l=await api("/my-listing"),os=await api("/supplier/orders");
+  const v=l||{business_name:"",lat:loc.lat,lng:loc.lng,address:"",service_area:"",contact:user.phone,price:40,delivery_charge:0,availability:1};
+  $("#view").innerHTML=`<div class="card"><h3 style="margin-top:0">My listing ${l?(l.verified?'<span class="tag g">Verified</span>':'<span class="tag a">Awaiting admin verification</span>'):""}</h3>
+  <div class="row"><div><label>Business name</label><input id="lb" value="${esc(v.business_name)}"></div><div><label>Contact phone</label><input id="lc" value="${esc(v.contact)}"></div></div>
+  <label>Address</label><input id="la" value="${esc(v.address)}"><label>Service area (comma separated)</label><input id="ls" value="${esc(v.service_area)}">
+  <div class="row"><div><label>Jar price (₹)</label><input id="lp" type="number" value="${v.price}"></div><div><label>Delivery charge (₹)</label><input id="ld" type="number" value="${v.delivery_charge}"></div>
+  <div><label>Stock</label><select id="lv"><option value="1" ${v.availability?"selected":""}>Available</option><option value="0" ${v.availability?"":"selected"}>Out of stock</option></select></div></div>
+  <label>Location (tap map to set pin)</label><div id="map" style="height:220px"></div>
+  <br><button id="lsave">Save listing</button></div>
+  <h3>Incoming requests</h3>${os.map(o=>`<div class="card"><div class="sup"><b>${o.qty} jar(s) · ₹${o.total}</b>${stTag(o.status)}</div>
+  <div class="muted">${esc(o.customer)} · <a href="tel:${esc(o.customer_phone)}">${esc(o.customer_phone)}</a><br>${esc(o.address)} ${o.note?"· "+esc(o.note):""}</div>
+  <div class="row" style="margin-top:6px">${({pending:[["accepted","Accept","ok"],["rejected","Reject","bad"]],accepted:[["out_for_delivery","Out for delivery","ok"],["rejected","Reject","bad"]],out_for_delivery:[["delivered","Mark delivered","ok"]]}[o.status]||[]).map(([s,t,c])=>`<button class="${c}" onclick="setSt(${o.id},'${s}','dash')">${t}</button>`).join("")}</div></div>`).join("")||'<div class="card muted">No requests yet.</div>'}`;
+  let pin=[v.lat,v.lng];map=L.map("map").setView(pin,14);L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+  let m=L.marker(pin).addTo(map);map.on("click",e=>{pin=[e.latlng.lat,e.latlng.lng];m.setLatLng(pin)});
+  $("#lsave").onclick=async()=>{try{await api("/my-listing",{method:"PUT",body:{business_name:$("#lb").value,contact:$("#lc").value,address:$("#la").value,service_area:$("#ls").value,price:$("#lp").value,delivery_charge:$("#ld").value,availability:$("#lv").value==="1",lat:pin[0],lng:pin[1]}});toast("Listing saved");dash()}catch(e){toast(e.message)}}}
+
+/* admin */
+async function admin(){
+  const rows=await api("/admin/suppliers");
+  $("#view").innerHTML=`<h3>Supplier verification</h3>`+rows.map(s=>`<div class="card sup"><div><b>${esc(s.business_name)}</b><div class="muted">${esc(s.address)} · ${esc(s.contact)}<br>₹${s.price} · ${esc(s.service_area)}</div></div>
+  <div>${s.verified?`<button class="alt" onclick="ver(${s.id},false)">Unverify</button>`:`<button class="ok" onclick="ver(${s.id},true)">Verify</button>`}</div></div>`).join("")}
+async function ver(id,v){await api(`/admin/suppliers/${id}/verify`,{method:"POST",body:{verified:v}});admin()}
+
+renderChrome();go("discover");
+</script>
+</body>
+</html>
