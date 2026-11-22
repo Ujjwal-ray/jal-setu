@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local SQLite database — app.py creates and seeds it on first run
+*.db
+
+# Node / Next.js build output (jalsetu/frontend has its own .gitignore too)
+node_modules/
+.next/
+*.tsbuildinfo
+
+# Local env files and OS clutter
+.env
+.env.local
+.DS_Store
+Thumbs.db
