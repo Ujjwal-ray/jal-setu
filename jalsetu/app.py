@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS suppliers(id INTEGER PRIMARY KEY, user_id INTEGER UNI
 CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY, supplier_id INTEGER NOT NULL, jar_size TEXT DEFAULT '20 L',
   price REAL NOT NULL, delivery_charge REAL DEFAULT 0, availability INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, supplier_id INTEGER NOT NULL,
-  qty INTEGER DEFAULT 1, address TEXT, note TEXT, status TEXT DEFAULT 'pending', ts INTEGER);
+  qty INTEGER DEFAULT 1, address TEXT, note TEXT, status TEXT DEFAULT 'pending', ts INTEGER,
+  phone TEXT, slot TEXT, email TEXT);
 CREATE TABLE IF NOT EXISTS reviews(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, supplier_id INTEGER NOT NULL,
   rating INTEGER NOT NULL, comment TEXT, ts INTEGER);
 """
@@ -41,8 +42,15 @@ def q(sql, args=(), one=False):
 def run(sql, args=()):
     cur = db().execute(sql, args); db().commit(); return cur.lastrowid
 
+def migrate(con):
+    # databases created before the request form gained phone / preferred slot / e-mail fields
+    cols = {r[1] for r in con.execute("PRAGMA table_info(orders)")}
+    for c in ("phone", "slot", "email"):
+        if c not in cols:
+            con.execute(f"ALTER TABLE orders ADD COLUMN {c} TEXT")
+
 def seed():
-    con = sqlite3.connect(DB_PATH); con.executescript(SCHEMA)
+    con = sqlite3.connect(DB_PATH); con.executescript(SCHEMA); migrate(con)
     if con.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
         h = generate_password_hash
         con.execute("INSERT INTO users(name,phone,password_hash,role) VALUES('Admin','admin',?,'admin')", (h("admin123"),))
@@ -183,8 +191,12 @@ def create_order():
     if not s: return jsonify(error="Supplier not found"), 404
     qty = max(1, min(int(d.get("qty") or 1), 50))
     if not (d.get("address") or "").strip(): return jsonify(error="Delivery address required"), 400
-    oid = run("INSERT INTO orders(user_id,supplier_id,qty,address,note,status,ts) VALUES(?,?,?,?,?,'pending',?)",
-              (g.user["id"], s["id"], qty, d["address"].strip(), d.get("note", ""), int(time.time())))
+    phone = "".join(ch for ch in str(d.get("phone") or "") if ch.isdigit())[-10:] or g.user["phone"]
+    email = (d.get("email") or "").strip()[:120]
+    if email and "@" not in email: return jsonify(error="That e-mail address doesn't look right"), 400
+    oid = run("INSERT INTO orders(user_id,supplier_id,qty,address,note,status,ts,phone,slot,email) VALUES(?,?,?,?,?,'pending',?,?,?,?)",
+              (g.user["id"], s["id"], qty, d["address"].strip(), d.get("note", ""), int(time.time()),
+               phone, (d.get("slot") or "").strip()[:40], email))
     return jsonify(id=oid, status="pending")
 
 ORD_SQL = """SELECT o.*, s.business_name, s.contact, u.name customer, u.phone customer_phone, p.price, p.delivery_charge
