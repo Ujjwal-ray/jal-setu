@@ -1,12 +1,16 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Order, type OrderStatus, type Supplier } from "@/lib/api";
+import { chime } from "@/lib/chime";
 import { rupee, slotText, tel, when } from "@/lib/format";
+import { usePoll } from "@/lib/usePoll";
 import { useApp } from "../AppProvider";
 import { Icon } from "../Icons";
+import LiveNote from "../LiveNote";
 import PageShell from "../PageShell";
+import ReportModal from "../ReportModal";
 import RoundButton from "../RoundButton";
 import StatusTrack from "../StatusTrack";
 
@@ -21,6 +25,28 @@ const NEXT: Partial<Record<OrderStatus, [OrderStatus, string, string][]>> = {
   out_for_delivery: [["delivered", "Mark delivered", "pill--ok"]],
 };
 
+const ACTIVE: OrderStatus[] = ["pending", "accepted", "out_for_delivery"];
+
+const POLL_MS = 15_000; // how often the dashboard checks for new requests
+
+/** Totals for the summary tiles. Earnings count delivered orders only, at the price quoted when each was placed. */
+function summarize(orders: Order[]) {
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+  const since = monthStart.getTime() / 1000;
+  const delivered = orders.filter((o) => o.status === "delivered");
+  const earned = (list: Order[]) => list.reduce((sum, o) => sum + (o.total || 0), 0);
+  return {
+    received: orders.length,
+    delivered: delivered.length,
+    jars: delivered.reduce((n, o) => n + o.qty, 0),
+    active: orders.filter((o) => ACTIVE.includes(o.status)).length,
+    earned: earned(delivered),
+    earnedThisMonth: earned(delivered.filter((o) => (o.delivered_at ?? o.ts) >= since)),
+  };
+}
+
 type Form = { business_name: string; contact: string; address: string; service_area: string; price: string; delivery_charge: string; availability: boolean };
 
 export default function SupplierDashboard() {
@@ -30,12 +56,15 @@ export default function SupplierDashboard() {
   const [pin, setPin] = useState<[number, number]>([22.5645, 88.3951]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [busy, setBusy] = useState(false);
+  const [report, setReport] = useState<Order | null>(null);
+  const [stale, setStale] = useState(false);
+  const seen = useRef<Map<number, OrderStatus> | null>(null); // each order's status at the last check
 
-  const load = useCallback(async () => {
+  // The shop details are loaded once, so refreshing the orders never undoes listing edits that aren't saved yet.
+  const loadListing = useCallback(async () => {
     try {
-      const [l, os] = await Promise.all([api<Supplier | null>("/my-listing"), api<Order[]>("/supplier/orders")]);
+      const l = await api<Supplier | null>("/my-listing");
       setListing(l);
-      setOrders(os);
       setF((cur) =>
         cur ?? {
           business_name: l?.business_name || "",
@@ -53,9 +82,42 @@ export default function SupplierDashboard() {
     }
   }, [toast, user]);
 
+  // Incoming requests: loaded on open, after each action, and every POLL_MS.
+  // Timer refreshes are `quiet`: an error turns the live line red instead of popping up every 15 seconds.
+  const loadOrders = useCallback(
+    async (quiet = false) => {
+      try {
+        const os = await api<Order[]>("/supplier/orders", { timeoutMs: 10_000 });
+        const before = seen.current;
+        seen.current = new Map(os.map((o) => [o.id, o.status]));
+        setOrders(os);
+        setStale(false);
+        if (!before) return; // first load: nothing to compare with yet
+        const arrived = os.filter((o) => o.status === "pending" && !before.has(o.id));
+        const cancelled = os.filter((o) => o.status === "cancelled" && before.has(o.id) && before.get(o.id) !== "cancelled");
+        const lines = [
+          ...arrived.map((o) => `New request: ${o.customer}, ${o.qty} ${o.qty === 1 ? "jar" : "jars"}`),
+          ...cancelled.map((o) => `${o.customer} cancelled their request`),
+        ];
+        if (lines.length) toast(lines.length > 2 ? `${lines.length} updates to your requests` : lines.join(" · "));
+        if (arrived.length) chime();
+      } catch (e) {
+        if (quiet) setStale(true);
+        else toast((e as Error).message);
+      }
+    },
+    [toast]
+  );
+
   useEffect(() => {
-    if (user?.role === "supplier") void load();
-  }, [user, load]);
+    if (user?.role !== "supplier") return;
+    seen.current = null;
+    void loadListing();
+    void loadOrders();
+  }, [user, loadListing, loadOrders]);
+
+  // keeps checking while the tab is in the background too, so a new request is never missed
+  usePoll(() => loadOrders(true), POLL_MS, { enabled: user?.role === "supplier", background: true });
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -76,7 +138,7 @@ export default function SupplierDashboard() {
     try {
       await api("/orders/" + o.id, { method: "PATCH", body: { status } });
       toast("Request updated");
-      void load();
+      void loadOrders();
     } catch (e) {
       toast((e as Error).message);
     }
@@ -84,9 +146,43 @@ export default function SupplierDashboard() {
 
   const set = (p: Partial<Form>) => f && setF({ ...f, ...p });
   const pending = orders.filter((o) => o.status === "pending").length;
+  const stats = useMemo(() => summarize(orders), [orders]);
+  const loaded = listing !== undefined;
+
+  // "(2) Supplier dashboard · JalSetu": requests waiting for an answer show in the browser tab
+  useEffect(() => {
+    const strip = (t: string) => t.replace(/^\(\d+\) /, "");
+    document.title = (pending ? `(${pending}) ` : "") + strip(document.title);
+    return () => {
+      document.title = strip(document.title);
+    };
+  }, [pending]);
+  const show = (v: string | number) => (loaded ? v : "–");
 
   return (
     <PageShell title="Supplier dashboard" sub="Keep your listing fresh and answer delivery requests" roles={["supplier"]}>
+      <ul className="stats" aria-label="Your business so far">
+        <li className="stat glass">
+          <span className="stat-label">Orders received</span>
+          <b className="stat-value">{show(stats.received)}</b>
+          <span className="stat-sub">since you joined</span>
+        </li>
+        <li className="stat glass">
+          <span className="stat-label">Delivered</span>
+          <b className="stat-value">{show(stats.delivered)}</b>
+          <span className="stat-sub">{stats.jars} {stats.jars === 1 ? "jar" : "jars"} delivered</span>
+        </li>
+        <li className="stat glass">
+          <span className="stat-label">In progress</span>
+          <b className="stat-value">{show(stats.active)}</b>
+          <span className="stat-sub">{pending ? `${pending} waiting for your answer` : "nothing waiting"}</span>
+        </li>
+        <li className="stat stat--money glass">
+          <span className="stat-label">Total earned</span>
+          <b className="stat-value">{show(rupee(stats.earned))}</b>
+          <span className="stat-sub">{rupee(stats.earnedThisMonth)} from this month&apos;s orders</span>
+        </li>
+      </ul>
       <div className="dash">
         <section className="water water--card" aria-labelledby="listing-title">
           <div className="water-bg" aria-hidden="true">
@@ -138,6 +234,7 @@ export default function SupplierDashboard() {
           <h2 id="in-title" className="dash-h">
             Incoming requests {pending > 0 && <span className="count">{pending} new</span>}
           </h2>
+          <LiveNote stale={stale}>Live · new requests appear here by themselves</LiveNote>
           {orders.length === 0 ? (
             <div className="gate glass">
               <p>{listing?.verified ? "No requests yet. They will appear here as customers order." : "Once an admin verifies your listing, customers can find you and send requests."}</p>
@@ -165,6 +262,11 @@ export default function SupplierDashboard() {
                       {(NEXT[o.status] || []).map(([st, label, cls]) => (
                         <button key={st} className={"pill " + cls} onClick={() => move(o, st)}>{label}</button>
                       ))}
+                      {o.reported ? (
+                        <span className="status-pill status-pill--wait">Problem reported</span>
+                      ) : (
+                        o.status !== "cancelled" && <button className="pill pill--ghost" onClick={() => setReport(o)}>Report a problem</button>
+                      )}
                     </div>
                   </div>
                 </li>
@@ -173,6 +275,7 @@ export default function SupplierDashboard() {
           )}
         </section>
       </div>
+      {report && <ReportModal order={report} side="supplier" onClose={() => setReport(null)} onSent={() => { setReport(null); void loadOrders(); }} />}
     </PageShell>
   );
 }
