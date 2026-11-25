@@ -45,6 +45,95 @@ export type Order = {
   price: number | null;
   delivery_charge: number | null;
   total: number;
+  delivered_at: number | null;
+  /** the customer has rated this delivery */
+  rated: boolean;
+  /** the person viewing has an open problem report on this order */
+  reported: boolean;
+};
+
+export type ReportCategory = "quality" | "quantity" | "late" | "behaviour" | "payment" | "address" | "other";
+
+export type Report = {
+  id: number;
+  order_id: number;
+  by_role: "customer" | "supplier";
+  category: ReportCategory;
+  message: string;
+  status: "open" | "resolved";
+  ts: number;
+  resolved_ts: number | null;
+  reporter: string;
+  reporter_phone: string;
+  business_name: string;
+  supplier_contact: string | null;
+  customer: string;
+  customer_phone: string;
+  order_status: OrderStatus;
+  qty: number;
+};
+
+/** 1 = yes, 0 = no, null = not answered */
+type Check = 0 | 1 | null;
+export type AdminReview = {
+  id: number;
+  order_id: number | null;
+  rating: number;
+  comment: string;
+  ts: number;
+  on_time: Check;
+  quality_ok: Check;
+  quantity_ok: Check;
+  customer: string;
+  business_name: string;
+};
+
+export type AdminSupplier = Supplier & {
+  owner_name: string | null;
+  owner_phone: string | null;
+  last_seen: number | null;
+  signed_in: boolean;
+  online: boolean;
+  orders_total: number;
+  delivered: number;
+  active: number;
+  on_the_way: number;
+  earned: number;
+  on_time_pct: number | null;
+  quality_pct: number | null;
+  quantity_pct: number | null;
+  open_reports: number;
+};
+
+export type AdminOverview = {
+  customers: { total: number; served: number; ordering_now: number };
+  orders: { total: number; active: number; by_status: Partial<Record<OrderStatus, number>> };
+  money: { earned: number; earned_this_month: number };
+  suppliers: {
+    accounts: number;
+    listed: number;
+    verified: number;
+    awaiting: number;
+    in_stock: number;
+    delivering_now: number;
+    busy: number;
+    signed_in: number;
+    signed_out: number;
+    online: number;
+  };
+  feedback: {
+    reviews: number;
+    rating: number | null;
+    on_time_pct: number | null;
+    quality_pct: number | null;
+    quantity_pct: number | null;
+    reports_total: number;
+    reports_open: number;
+    reports_open_from_customers: number;
+    reports_open_from_suppliers: number;
+  };
+  online_minutes: number;
+  generated_at: number;
 };
 
 const TOKEN_KEY = "jstoken";
@@ -80,7 +169,8 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T>(path: string, opt: { method?: string; body?: unknown } = {}): Promise<T> {
+/** `timeoutMs`: give up after this long, so a request stuck on a bad connection can't block the next auto-refresh. */
+export async function api<T>(path: string, opt: { method?: string; body?: unknown; timeoutMs?: number } = {}): Promise<T> {
   const { token } = readSession();
   let r: Response;
   try {
@@ -88,6 +178,7 @@ export async function api<T>(path: string, opt: { method?: string; body?: unknow
       method: opt.method || "GET",
       headers: { "Content-Type": "application/json", ...(token ? { Authorization: "Bearer " + token } : {}) },
       body: opt.body !== undefined ? JSON.stringify(opt.body) : undefined,
+      signal: opt.timeoutMs ? AbortSignal.timeout(opt.timeoutMs) : undefined,
     });
   } catch {
     throw new ApiError("Can't reach the JalSetu server. Is the backend running?", 0);
