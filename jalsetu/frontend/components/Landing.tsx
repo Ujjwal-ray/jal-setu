@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, supplierQuery, type Filters, type Loc, type Supplier } from "@/lib/api";
 import { useApp } from "./AppProvider";
@@ -21,7 +22,9 @@ const DEFAULT_FILTERS: Filters = { q: "", maxKm: "3", maxPrice: "", sort: "dista
 const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 
 export default function Landing() {
-  const { toast } = useApp();
+  const { toast, user } = useApp();
+  const router = useRouter();
+  const isSupplier = user?.role === "supplier";
   const [loc, setLoc] = useState<Loc>(DEFAULT_LOC);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [all, setAll] = useState<Supplier[]>([]);
@@ -63,6 +66,11 @@ export default function Landing() {
     if (error) toast(error);
   }, [error, toast]);
 
+  // suppliers run their business from the dashboard; this page is for customers
+  useEffect(() => {
+    if (isSupplier) router.replace("/supplier");
+  }, [isSupplier, router]);
+
   const open = useMemo(() => all.filter((s) => s.availability), [all]);
   const minPrice = useMemo(() => (open.length ? Math.min(...open.map((s) => s.price || Infinity)) : null), [open]);
 
@@ -74,6 +82,8 @@ export default function Landing() {
       { enableHighAccuracy: true, timeout: 10000 }
     );
   }, [toast]);
+
+  if (isSupplier) return null; // on the way to /supplier
 
   const orderFrom = (id: number) => {
     setOrderId(id);
