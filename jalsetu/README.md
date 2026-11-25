@@ -19,6 +19,14 @@ Point the frontend at a backend somewhere else with `JALSETU_API=http://host:por
 Demo logins: customer 9000000001 / demo123 | supplier 9000000100 / supplier123 | admin / admin123
 Delete `jalsetu.db` to reset seed data.
 
+## Forgotten passwords
+
+- **Self-service:** Sign in → *Forgot password?* texts a 6-digit code (valid 15 minutes, 5 tries, 3 codes per hour). No SMS provider is connected yet, so the code is printed in the terminal running `python app.py`. To text real phones, add a provider in `backend/sms.py` and set `JALSETU_SMS`.
+- **Admin help:** someone who can't get the SMS calls JalSetu. After checking it's them, an admin opens *Password help* on `/admin`, creates a code and reads it out. They enter it under *Forgot password? → I already have a code*.
+- **Admins:** `flask --app app reset-password LOGIN` on the server.
+
+Setting a new password signs the account out on every other device.
+
 ## Pages
 
 | Route        | Who        | What |
@@ -26,7 +34,7 @@ Delete `jalsetu.db` to reset seed data.
 | `/`          | everyone   | Hero, quick delivery request (underwater form), nearby-supplier slider + map with filters, how it works, delivery types, verification certificates |
 | `/requests`  | signed in  | Your requests with a status tracker; cancel a pending one, rate after delivery |
 | `/supplier`  | suppliers  | Edit listing (price, delivery charge, stock, map pin) and move incoming requests through accepted → out for delivery → delivered |
-| `/admin`     | admin      | Verify or unverify suppliers; only verified ones are shown to customers |
+| `/admin`     | admin      | Verify or unverify suppliers (only verified ones are shown to customers), resolve problem reports, create password-reset codes |
 
 ## Artwork
 
