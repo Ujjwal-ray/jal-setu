@@ -1,4 +1,4 @@
-import type { OrderStatus, Supplier } from "./api";
+import type { OrderStatus, ReportCategory, Supplier } from "./api";
 
 export const rupee = (n: number | null | undefined) => "₹" + (n ?? 0).toLocaleString("en-IN");
 
@@ -14,6 +14,12 @@ export function whatsapp(contact: string | null | undefined, text?: string) {
 }
 
 export const tel = (contact: string | null | undefined) => "tel:" + (contact || "").replace(/[^\d+]/g, "");
+
+/** JalSetu support lines: shown where someone needs a person to help, e.g. a forgotten password. */
+export const SUPPORT_PHONES = ["9330427500", "9163717527"];
+
+/** "9330427500" -> "93304 27500", the usual way to write an Indian mobile number. */
+export const phoneText = (n: string) => (n.length === 10 ? `${n.slice(0, 5)} ${n.slice(5)}` : n);
 
 export const deliveryText = (s: Pick<Supplier, "delivery_charge">) =>
   s.delivery_charge ? `${rupee(s.delivery_charge)} delivery` : "Free delivery";
@@ -44,3 +50,29 @@ export function slotText(slot: string | null | undefined) {
 }
 
 export const certNo = (id: number) => `JS-2026-${String(id).padStart(4, "0")}`;
+
+/** "just now", "12 min ago", "3 h ago", or the date for anything older than a day. */
+export function ago(ts: number | null | undefined) {
+  if (!ts) return "never";
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return when(ts);
+}
+
+export const pct = (n: number | null | undefined) => (n == null ? "–" : `${n}%`);
+
+export const REPORT_LABEL: Record<ReportCategory, string> = {
+  quality: "Water quality",
+  quantity: "Wrong number of jars",
+  late: "Late or missed delivery",
+  behaviour: "Behaviour",
+  payment: "Payment",
+  address: "Wrong address / not reachable",
+  other: "Something else",
+};
+
+/** what each side of an order can report */
+export const CUSTOMER_REPORTS: ReportCategory[] = ["quality", "quantity", "late", "behaviour", "payment", "other"];
+export const SUPPLIER_REPORTS: ReportCategory[] = ["address", "payment", "behaviour", "other"];
