@@ -38,10 +38,15 @@ export default function TopBar({ ribbon }: { ribbon?: React.ReactNode }) {
                   {user.name}
                   <small>{user.role === "user" ? "Customer" : user.role === "supplier" ? "Supplier" : "Admin"} · {user.phone}</small>
                 </div>
-                <Link role="menuitem" href="/">Find suppliers</Link>
-                <Link role="menuitem" href="/requests">My requests</Link>
-                {user.role === "supplier" && <Link role="menuitem" href="/supplier">Supplier dashboard</Link>}
-                {user.role === "admin" && <Link role="menuitem" href="/admin">Admin · verification</Link>}
+                {user.role === "supplier" ? (
+                  <Link role="menuitem" href="/supplier">Supplier dashboard</Link>
+                ) : (
+                  <>
+                    <Link role="menuitem" href="/">Find suppliers</Link>
+                    <Link role="menuitem" href="/requests">My requests</Link>
+                  </>
+                )}
+                {user.role === "admin" && <Link role="menuitem" href="/admin">Admin dashboard</Link>}
                 <button role="menuitem" onClick={signOut}>Sign out</button>
               </div>
             )}
