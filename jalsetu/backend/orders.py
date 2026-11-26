@@ -2,19 +2,22 @@
 import re
 import time
 
-from flask import Blueprint, g, jsonify
+from flask import Blueprint, current_app, g, jsonify
 
 from . import db
 from .auth import auth
+from .shop_hours import is_open
 from .util import body, fail, normalize_phone, number, text
 
 bp = Blueprint("orders", __name__)
 
 # price and delivery_charge come from the order itself: what the customer was quoted when they ordered.
 # `reported`: the person viewing has an open problem report on this order.
+# `payout_account`: the supplier can be paid online through Razorpay (payments.py).
 ORDER_SQL = """SELECT o.*, s.business_name, s.contact, u.name customer, u.phone customer_phone,
   EXISTS (SELECT 1 FROM reviews r WHERE r.order_id = o.id) rated,
-  EXISTS (SELECT 1 FROM reports rp WHERE rp.order_id = o.id AND rp.user_id = ? AND rp.status = 'open') reported
+  EXISTS (SELECT 1 FROM reports rp WHERE rp.order_id = o.id AND rp.user_id = ? AND rp.status = 'open') reported,
+  EXISTS (SELECT 1 FROM payout_accounts pa WHERE pa.supplier_id = o.supplier_id) payout_account
   FROM orders o JOIN suppliers s ON s.id = o.supplier_id JOIN users u ON u.id = o.user_id"""
 
 # problems a customer or a supplier can report on an order (the frontend shows each side its own subset)
@@ -30,10 +33,14 @@ EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 
 
 def _orders(where, args):
+    how = current_app.config["PAYMENTS"]
     rows = db.query(f"{ORDER_SQL} WHERE {where} ORDER BY o.id DESC", (g.user["id"],) + args)
     for r in rows:
         r["rated"], r["reported"] = bool(r["rated"]), bool(r["reported"])
-        r["total"] = (r["price"] or 0) * r["qty"] + (r["delivery_charge"] or 0)
+        r["total"] = (r["price"] or 0) * r["qty"] + (r["delivery_charge"] or 0)  # the supplier's part
+        r["to_pay"] = r["total"] + (r["service_fee"] or 0)                     # what the customer pays
+        has_account = bool(r.pop("payout_account"))
+        r["can_pay_online"] = how == "demo" or (how == "razorpay" and has_account)
     return rows
 
 
@@ -49,6 +56,8 @@ def create_order():
         fail("Supplier not found", 404)
     if s["user_id"] == g.user["id"]:
         fail("You can't order from your own listing")
+    if not is_open(sid):
+        fail("This shop is closed right now. Pick one that's open", 409)
     if not s["availability"]:
         fail("This supplier is out of stock right now. Pick another one", 409)
 
@@ -64,11 +73,14 @@ def create_order():
     if email and not EMAIL.fullmatch(email):
         fail("That e-mail address doesn't look right")
 
-    oid = db.execute("""INSERT INTO orders(user_id,supplier_id,qty,address,note,status,ts,phone,slot,email,price,delivery_charge)
-                        VALUES(?,?,?,?,?,'pending',?,?,?,?,?,?)""",
+    # JalSetu's fee is fixed when ordering, like the prices: a later change doesn't alter this bill
+    fee = current_app.config["SERVICE_FEE"]
+    oid = db.execute("""INSERT INTO orders(user_id,supplier_id,qty,address,note,status,ts,phone,slot,email,price,delivery_charge,
+                                           service_fee,payment_status)
+                        VALUES(?,?,?,?,?,'pending',?,?,?,?,?,?,?,'unpaid')""",
                      (g.user["id"], sid, qty, address, text(d, "note", 300), int(time.time()),
-                      phone, text(d, "slot", 40), email, s["price"], s["delivery_charge"] or 0)).lastrowid
-    return jsonify(id=oid, status="pending"), 201
+                      phone, text(d, "slot", 40), email, s["price"], s["delivery_charge"] or 0, fee)).lastrowid
+    return jsonify(id=oid, status="pending", service_fee=fee), 201
 
 
 @bp.get("/orders")
