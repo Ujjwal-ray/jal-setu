@@ -4,7 +4,7 @@ import L from "leaflet";
 import { useEffect, useMemo } from "react";
 import { Circle, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import type { Loc, Supplier } from "@/lib/api";
-import { rupee } from "@/lib/format";
+import { canOrder, rupee } from "@/lib/format";
 
 const TILE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
@@ -52,7 +52,7 @@ export default function SupplierMap({
 }) {
   const active = suppliers.find((s) => s.id === activeId);
   const icons = useMemo(
-    () => Object.fromEntries(suppliers.map((s) => [s.id, priceIcon(s.price, s.id === activeId, !s.availability)])),
+    () => Object.fromEntries(suppliers.map((s) => [s.id, priceIcon(s.price, s.id === activeId, !canOrder(s))])),
     [suppliers, activeId]
   );
   return (
