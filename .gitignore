@@ -7,6 +7,9 @@ venv/
 # Local SQLite database — app.py creates and seeds it on first run
 *.db
 
+# Server logs (SMS codes are printed here while no SMS provider is connected)
+*.log
+
 # Node / Next.js build output (jalsetu/frontend has its own .gitignore too)
 node_modules/
 .next/
