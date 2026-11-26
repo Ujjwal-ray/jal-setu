@@ -5,6 +5,10 @@ import { api, type User } from "@/lib/api";
 import ForgotPassword from "./ForgotPassword";
 import Modal from "./Modal";
 import RoundButton from "./RoundButton";
+import SignupCode from "./SignupCode";
+
+/** What /register answers: a code was texted (sign-up step 1), or, with phone checks switched off, the new account. */
+type RegisterReply = { token?: string; user?: User; delivery?: "sms" | "console" };
 
 export type AuthRequest = { phone?: string; message?: string; register?: boolean; onDone?: (u: User) => void };
 
@@ -25,16 +29,26 @@ export default function AuthModal({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [verify, setVerify] = useState<{ testMode: boolean } | null>(null); // sign-up waiting for the texted code
+
+  /** Sign-up step 1, and "Send a new code": the server texts a code, and the box moves on to asking for it. */
+  async function startSignup() {
+    const j = await api<RegisterReply>("/register", { method: "POST", body: { name, role, phone: phone.trim(), password } });
+    if (j.token && j.user) onDone(j.token, j.user); // phone checks are switched off on the server
+    else setVerify({ testMode: j.delivery === "console" });
+  }
 
   async function submit(e?: React.FormEvent) {
     e?.preventDefault();
     setErr("");
     setBusy(true);
     try {
-      const body: Record<string, string> = { phone: phone.trim(), password };
-      if (register) Object.assign(body, { name, role });
-      const j = await api<{ token: string; user: User }>(register ? "/register" : "/login", { method: "POST", body });
-      onDone(j.token, j.user);
+      if (register) {
+        await startSignup();
+      } else {
+        const j = await api<{ token: string; user: User }>("/login", { method: "POST", body: { phone: phone.trim(), password } });
+        onDone(j.token, j.user);
+      }
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -43,9 +57,17 @@ export default function AuthModal({
   }
 
   return (
-    <Modal onClose={onClose} variant="water" label={forgot ? "Reset password" : register ? "Create account" : "Sign in"}>
+    <Modal onClose={onClose} variant="water" label={forgot ? "Reset password" : verify ? "Verify phone" : register ? "Create account" : "Sign in"}>
       {forgot ? (
         <ForgotPassword phone={phone} onBack={() => setForgot(false)} onDone={onDone} />
+      ) : verify ? (
+        <SignupCode
+          phone={phone.trim()}
+          testMode={verify.testMode}
+          onResend={startSignup}
+          onBack={() => setVerify(null)}
+          onDone={onDone}
+        />
       ) : (
         <form className="water-form water-form--modal" onSubmit={submit}>
           <h2 className="modal-title">{register ? "Create your account" : "Sign in to JalSetu"}</h2>
