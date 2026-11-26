@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, supplierQuery, type Filters, type Loc, type Supplier } from "@/lib/api";
+import { canOrder } from "@/lib/format";
 import { useApp } from "./AppProvider";
 import CallFab from "./CallFab";
 import Footer from "./Footer";
@@ -71,7 +72,7 @@ export default function Landing() {
     if (isSupplier) router.replace("/supplier");
   }, [isSupplier, router]);
 
-  const open = useMemo(() => all.filter((s) => s.availability), [all]);
+  const open = useMemo(() => all.filter(canOrder), [all]); // open today and in stock
   const minPrice = useMemo(() => (open.length ? Math.min(...open.map((s) => s.price || Infinity)) : null), [open]);
 
   const locate = useCallback(() => {
