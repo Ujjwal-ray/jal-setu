@@ -115,6 +115,33 @@ Yes/no values are stored as `1` (yes) and `0` (no).
 | `used` | `1` once used up or cancelled |
 | `issued_by` | Empty if the person asked by SMS, or the admin's user id if an admin made it |
 
+### `signup_codes`: sign-ups waiting for their texted code
+
+Signing up takes two steps (lesson 06). The account isn't put in `users` until the person types in the code
+texted to their phone. Until then, what they filled in waits here.
+
+| Column | Meaning |
+|--------|---------|
+| `phone` | The number signing up, which the code was texted to |
+| `name`, `role` | What they filled in on the sign-up form |
+| `password_hash` | Their chosen password, already scrambled. Wiped once the account is made |
+| `code_hash` | Scrambled code (the real code is never stored) |
+| `created`, `expires` | Valid for 15 minutes |
+| `attempts` | Wrong guesses so far (5 allowed) |
+| `used` | `1` once used up, or replaced by a newer code |
+
+### `attempts`: tries that count toward a limit
+
+A notebook of tries, used to stop someone trying over and over (lesson 06, section 6). One row per try.
+
+| Column | Meaning |
+|--------|---------|
+| `kind` | What was tried: `wrong_password`, `wrong_password_ip`, `signup_ip` or `reset_ip` |
+| `key` | Who tried: an account's login (like `9000000001`), or an internet address (like `203.0.113.5`) |
+| `ts` | When |
+
+Rows older than an hour are deleted, because no limit looks back further than that.
+
 ### How the tables connect
 
 A column that holds another table's `id` (like `orders.user_id`) is a **foreign key**. It's how rows point
@@ -132,6 +159,10 @@ orders    ──1 reviews           at most one review per delivered order (revi
 orders    ──< reports           an order can have several problem reports (reports.order_id)
 users     ──< reviews, reports, password_resets   who wrote / asked for each one
 ```
+
+Two tables point at no other table. `signup_codes` holds a phone number instead of a `user_id` because the
+account doesn't exist yet. `attempts` holds a login or an internet address, because a wrong password can be
+typed for an account that doesn't exist.
 
 ```
             ┌──────────┐ owns  ┌────────────┐  price  ┌──────────┐
@@ -243,8 +274,8 @@ with the *old* layout (the **schema**). Deleting their data isn't acceptable, so
 by step. Each step is a **migration**.
 
 SQLite has a spare number stored inside every database file, `user_version`. JalSetu uses it to remember
-**how many migrations have already run**. On start-up: "this file is at version 2, the code has 4 steps, so
-run steps 3 and 4." The rule written in the code: *append new steps; never edit old ones.*
+**how many migrations have already run**. On start-up: "this file is at version 2, the code has 6 steps, so
+run steps 3 to 6." The rule written in the code: *append new steps; never edit old ones.*
 
 ---
 
@@ -306,7 +337,7 @@ def close(_exc=None):
 ```
 
 - `g.pop("db", None)`: take the connection off `g` (or `None` if no one opened one).
-- Close it. Line 188 tells Flask to call this automatically at the end of every request ("teardown").
+- Close it. Line 208 tells Flask to call this automatically at the end of every request ("teardown").
 - `_exc` is information about an error, if one happened. The leading `_` is a convention for "unused".
 
 ### Lines 28–30: `query()`, read rows
@@ -421,17 +452,41 @@ Lines 92–95 add four **indexes** for the columns searched most.
 
 Creates the `password_resets` table (see section 2) and an index on `user_id`.
 
-### Lines 126–127: the list of steps
+### Lines 126–133: migration 5, sign-ups waiting for their code
+
+Creates the `signup_codes` table (see section 2) and an index on `phone`, because the code is always looked up
+by phone number.
+
+### Lines 136–142: migration 6, the `attempts` notebook
 
 ```python
-MIGRATIONS = [_v1_prototype, _v2_snapshots_reviews_sessions, _v3_activity_and_feedback, _v4_password_resets]
+def _v6_attempts(con):
+    con.execute("""CREATE TABLE IF NOT EXISTS attempts(id INTEGER PRIMARY KEY, kind TEXT NOT NULL, key TEXT NOT NULL,
+        ts INTEGER NOT NULL)""")
+    con.execute("CREATE INDEX IF NOT EXISTS attempts_kind_key ON attempts(kind, key, ts)")
+```
+
+- Creates the `attempts` table (see section 2).
+- The index covers **three columns at once**, in the same order the code searches them: "this kind, for this
+  login or address, since this time". Like a phone book sorted by surname, then first name, the database can
+  jump straight to the right rows.
+
+Before this step, the server kept wrong-password counts in its own memory, and restarting it wiped them.
+Lesson 06 explains why the database is better.
+
+### Lines 145–147: the list of steps
+
+```python
+MIGRATIONS = [_v1_prototype, _v2_snapshots_reviews_sessions, _v3_activity_and_feedback, _v4_password_resets,
+              _v5_signup_codes, _v6_attempts]
 SCHEMA_VERSION = len(MIGRATIONS)
 ```
 
-A list of the four **functions themselves** (no `()`, so they aren't run yet, just collected in order).
-`len(...)` = how many items = 4.
+A list of the six **functions themselves** (no `()`, so they aren't run yet, just collected in order).
+The list is long, so it continues onto a second line. Python allows that while a `[` is still open.
+`len(...)` = how many items = 6.
 
-### Lines 130–144: `migrate()`, run the missing steps
+### Lines 150–164: `migrate()`, run the missing steps
 
 ```python
 def migrate(path):
@@ -453,23 +508,23 @@ def migrate(path):
 
 Line by line:
 
-- **131** Open the file with `isolation_level=None`, meaning "I'll start and finish transactions myself".
-- **132** `try: … finally:` makes sure line 144 (`con.close()`) runs no matter what.
-- **133** Read the stored version number. A brand-new file says `0`.
-- **134** `MIGRATIONS[version:]` is the list **from position `version` to the end**, i.e. only the steps not yet
-  run. `enumerate(..., start=version + 1)` pairs each with its step number. At version 2 you'd get `(3, _v3_…)`
-  and `(4, _v4_…)`.
-- **135** `BEGIN IMMEDIATE`: start a transaction and lock the database for writing right away.
-- **137** Run the step, e.g. `_v3_activity_and_feedback(con)`.
-- **138** Record the new version number *inside the same transaction*.
-- **139** `COMMIT`: save it all.
-- **140–142** If *anything* failed, `ROLLBACK` undoes this step completely, then `raise` passes the error on so
+- **151** Open the file with `isolation_level=None`, meaning "I'll start and finish transactions myself".
+- **152** `try: … finally:` makes sure line 164 (`con.close()`) runs no matter what.
+- **153** Read the stored version number. A brand-new file says `0`.
+- **154** `MIGRATIONS[version:]` is the list **from position `version` to the end**, i.e. only the steps not yet
+  run. `enumerate(..., start=version + 1)` pairs each with its step number. At version 4 you'd get `(5, _v5_…)`
+  and `(6, _v6_…)`.
+- **155** `BEGIN IMMEDIATE`: start a transaction and lock the database for writing right away.
+- **157** Run the step, e.g. `_v3_activity_and_feedback(con)`.
+- **158** Record the new version number *inside the same transaction*.
+- **159** `COMMIT`: save it all.
+- **160–162** If *anything* failed, `ROLLBACK` undoes this step completely, then `raise` passes the error on so
   the server stops with a clear message instead of running on a half-upgraded database.
 
 **Why?** Because each step and its version number commit together, a crash can never leave the database
 "half-migrated". Next start-up simply retries the step.
 
-### Lines 149–155: the demo suppliers
+### Lines 169–175: the demo suppliers
 
 ```python
 DEMO_SUPPLIERS = [  # name, lat, lng, address, service area, contact, price, delivery, in stock, verified
@@ -483,7 +538,7 @@ A list of **tuples** (fixed little lists written with `( )`). The comment says w
 Five shops in Kolkata. The last has `verified = 0`, so customers can't see it until an admin verifies it.
 That's handy for demonstrating verification.
 
-### Lines 158–181: `seed_demo()`, fill an empty database
+### Lines 178–201: `seed_demo()`, fill an empty database
 
 ```python
 def seed_demo(path):
@@ -526,9 +581,9 @@ For each demo shop (`i` counts 0, 1, 2…):
    separate values. `d[9]` = verified.
 3. Make its **price** row: `d[6]` price, `d[7]` delivery charge, `d[8]` in stock.
 
-Lines 177–179 add two sample reviews (5 stars for shop 1, 4 stars for shop 2) so ratings show from the start.
+Lines 197–199 add two sample reviews (5 stars for shop 1, 4 stars for shop 2) so ratings show from the start.
 
-### Lines 184–188: `init_app()`, what runs at start-up
+### Lines 204–208: `init_app()`, what runs at start-up
 
 ```python
 def init_app(app):
@@ -559,7 +614,8 @@ Called once by `create_app()` when the backend starts:
 1. So old bills keep the price the customer was quoted, even if the supplier changes the price later.
 2. Cancel **every** order in the database.
 3. To prevent SQL injection: the value is sent separately and treated only as data.
-4. `migrate()` runs only `_v4_password_resets`, then sets `user_version = 4`, in one transaction.
+4. `migrate()` runs `_v4_password_resets`, `_v5_signup_codes` and `_v6_attempts` in that order. Each step gets
+   its own transaction and moves `user_version` up by one, so the file ends at version 6.
 5. The unique index `reviews_order` on `reviews(order_id)`: SQLite refuses a second row with the same `order_id`.
 
 </details>
