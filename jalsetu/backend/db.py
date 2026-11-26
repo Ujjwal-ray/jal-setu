@@ -123,7 +123,18 @@ def _v4_password_resets(con):
     con.execute("CREATE INDEX IF NOT EXISTS password_resets_user ON password_resets(user_id)")
 
 
-MIGRATIONS = [_v1_prototype, _v2_snapshots_reviews_sessions, _v3_activity_and_feedback, _v4_password_resets]
+def _v5_signup_codes(con):
+    # sign-ups waiting for the code texted to their phone: the account is only created in users once the
+    # number is proven. Holds the chosen name, role and password hash until then.
+    con.execute("""CREATE TABLE IF NOT EXISTS signup_codes(id INTEGER PRIMARY KEY, phone TEXT NOT NULL,
+        name TEXT NOT NULL, role TEXT NOT NULL, password_hash TEXT NOT NULL, code_hash TEXT NOT NULL,
+        created INTEGER NOT NULL, expires INTEGER NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0, used INTEGER NOT NULL DEFAULT 0)""")
+    con.execute("CREATE INDEX IF NOT EXISTS signup_codes_phone ON signup_codes(phone)")
+
+
+MIGRATIONS = [_v1_prototype, _v2_snapshots_reviews_sessions, _v3_activity_and_feedback, _v4_password_resets,
+              _v5_signup_codes]
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
