@@ -1,5 +1,6 @@
 """Accounts and sessions: register, sign in, sign out, current user, forgotten passwords, and the @auth guard."""
 import hashlib
+import ipaddress
 import re
 import secrets
 import sqlite3
@@ -14,8 +15,12 @@ from .util import body, fail, normalize_phone, text
 
 bp = Blueprint("auth", __name__)
 
-MAX_FAILED_LOGINS = 5      # wrong passwords per account ...
-LOCKOUT_SECONDS = 5 * 60   # ... within this window lock sign-in for that account
+LIMITS = {  # kind of try: (how many are allowed, within how many seconds). Each try is a row in the attempts table.
+    "wrong_password": (5, 5 * 60),        # wrong passwords for one account; then signing in to it pauses
+    "wrong_password_ip": (20, 15 * 60),   # wrong passwords from one internet address, whichever accounts they're for
+    "signup_ip": (10, 3600),              # sign-ups started from one internet address
+    "reset_ip": (10, 3600),               # forgot-password texts asked for from one internet address
+}
 SEEN_EVERY = 60            # refresh users.last_seen at most once a minute per account
 
 CODE_TTL = 15 * 60         # a texted code (sign-up or password reset) works for 15 minutes ...
@@ -84,14 +89,60 @@ def _public(user):
     return {k: user[k] for k in ("id", "name", "phone", "role")}
 
 
-# Failed sign-ins per login, kept in memory (per server process; resets on restart).
-def _recent_failures(login, now):
-    failures = current_app.extensions.setdefault("jalsetu_login_failures", {})
-    if len(failures) > 10_000:
-        failures.clear()
-    recent = [t for t in failures.get(login, []) if t > now - LOCKOUT_SECONDS]
-    failures[login] = recent
-    return recent
+# ---------------------------------------------------------------------------
+# Limits on repeated tries (LIMITS above). The tries are rows in the attempts table, so a restart doesn't wipe
+# them and every server process counts the same ones.
+
+def _client_ip():
+    """The visitor's internet address, or None when this server can't tell visitors apart."""
+    ip = request.remote_addr or ""
+    try:
+        if not ipaddress.ip_address(ip).is_loopback:
+            return ip
+    except ValueError:
+        pass  # no address, or not a valid one
+    # The request came from this same computer. Through the Next.js server every request does, because it
+    # forwards visitors' calls without saying who they're from. Limiting by address would then lump every
+    # visitor together, so one person's wrong passwords would lock everyone out: per-address limits stay off.
+    if not current_app.extensions.get("jalsetu_ip_warned"):
+        current_app.extensions["jalsetu_ip_warned"] = True
+        current_app.logger.warning("Limits per internet address are off: requests arrive from %s, not from the "
+                                   "visitors. Behind a proxy that adds X-Forwarded-For, set JALSETU_PROXIES", ip or "?")
+    return None
+
+
+def _take(kind, key, message):
+    """Count one try of LIMITS[kind] for `key` (an account, or an address from _client_ip), or fail with 429
+    and `message` when the window already holds as many as allowed. Returns the try's id, so it can be given back."""
+    if key is None:
+        return None
+    most, window = LIMITS[kind]
+    now = int(time.time())
+    con = db.get()
+    with con:  # check and count in one transaction: requests sent at the same moment are counted one after another
+        con.execute("DELETE FROM attempts WHERE ts <= ?", (now - max(w for _, w in LIMITS.values()),))
+        used = con.execute("SELECT COUNT(*) FROM attempts WHERE kind = ? AND key = ? AND ts > ?",
+                           (kind, key, now - window)).fetchone()[0]
+        if used >= most:
+            fail(message, 429)
+        return con.execute("INSERT INTO attempts(kind,key,ts) VALUES(?,?,?)", (kind, key, now)).lastrowid
+
+
+def _clear_wrong_passwords(login, give_back=None):
+    """Lift a wrong-password pause on an account, and give back the try `give_back` if one is named."""
+    db.execute("DELETE FROM attempts WHERE (kind = 'wrong_password' AND key = ?) OR id = ?", (login, give_back))
+
+
+def confirm_password(password):
+    """For an action that asks the signed-in person to type their password again (opening the shop, say): fail
+    unless it's right. A wrong one counts toward the same pause as a wrong password at sign-in. The answer is
+    403, not 401, so the frontend doesn't take it to mean "signed out"."""
+    login = g.user["phone"]
+    _take("wrong_password", login, "Too many wrong passwords. Try again in a few minutes")
+    row = db.query("SELECT password_hash FROM users WHERE id = ?", (g.user["id"],), one=True)
+    if not isinstance(password, str) or not check_password_hash(row["password_hash"], password):
+        fail("That password isn't right", 403)
+    _clear_wrong_passwords(login)
 
 
 # ---------------------------------------------------------------------------
@@ -120,13 +171,18 @@ def _check_code(table, row, code):
          else "That code isn't right, and it has now stopped working. Ask for a new one")
 
 
+def texts_sent_today():
+    """Codes texted in the last 24 hours: sign-up codes, and reset codes people asked for themselves."""
+    since = int(time.time()) - 86400
+    return db.query("""SELECT (SELECT COUNT(*) FROM signup_codes WHERE created > ?)
+                            + (SELECT COUNT(*) FROM password_resets WHERE issued_by IS NULL AND created > ?) n""",
+                    (since, since), one=True)["n"]
+
+
 def _check_sms_budget():
     """Refuse once the last 24 hours have used SMS_DAILY_LIMIT texts: a cap on the SMS bill if someone floods
     the sign-up form with numbers."""
-    since = int(time.time()) - 86400
-    sent = db.query("""SELECT (SELECT COUNT(*) FROM signup_codes WHERE created > ?)
-                            + (SELECT COUNT(*) FROM password_resets WHERE issued_by IS NULL AND created > ?) n""",
-                    (since, since), one=True)["n"]
+    sent = texts_sent_today()
     if sent >= current_app.config["SMS_DAILY_LIMIT"]:
         current_app.logger.error("SMS daily limit reached: %s texts in 24 hours (JALSETU_SMS_DAILY_LIMIT)", sent)
         fail("We can't send more codes right now. Try again later, or call JalSetu support", 503)
@@ -153,6 +209,8 @@ def register():
         fail("Enter a 10-digit mobile number")
     if len(password) < 6:
         fail("Password must be at least 6 characters")
+    # counted before the "already registered" check too, which also limits how fast one address can test numbers
+    _take("signup_ip", _client_ip(), "Too many sign-ups from this network in the last hour. Try again later")
     if db.query("SELECT 1 FROM users WHERE phone = ?", (phone,), one=True):
         fail(TAKEN, 409)
     password_hash = generate_password_hash(password)
@@ -213,15 +271,17 @@ def login():
     raw = text(d, "phone", 40)
     login_name = normalize_phone(raw) or raw  # the admin account signs in as "admin", not a phone number
     password = d.get("password") if isinstance(d.get("password"), str) else ""
-    now = time.time()
-    failures = _recent_failures(login_name, now)
-    if len(failures) >= MAX_FAILED_LOGINS:
-        fail("Too many wrong passwords. Try again in a few minutes", 429)
+    # Each try is counted as a wrong password before the password is checked, so a burst of tries sent at once
+    # can't all slip in before any is counted; the right password gives the try back. The address is counted
+    # first: once it is blocked, its tries stop counting against accounts, so it can't keep locking people out.
+    ip_try = _take("wrong_password_ip", _client_ip(),
+                   "Too many wrong passwords from this network. Try again in a few minutes")
+    _take("wrong_password", login_name, "Too many wrong passwords. Try again in a few minutes")
     user = db.query("SELECT * FROM users WHERE phone = ?", (login_name,), one=True)
     if not user or not check_password_hash(user["password_hash"], password):
-        failures.append(now)
         fail("Wrong phone number or password", 401)
-    failures.clear()
+    # The address's earlier wrong passwords stay counted: signing in to an account of its own mustn't reset them.
+    _clear_wrong_passwords(login_name, give_back=ip_try)
     mark_seen(user["id"])
     return jsonify(token=issue_token(user["id"]), user=_public(user))
 
@@ -262,6 +322,7 @@ def forgot_password():
     phone = normalize_phone(body().get("phone"))
     if not phone:
         fail("Enter the 10-digit mobile number you signed up with")
+    _take("reset_ip", _client_ip(), "Too many codes asked for from this network. Try again later, or call JalSetu support")
     user = db.query("SELECT id FROM users WHERE phone = ?", (phone,), one=True)
     if not user:
         # /register already tells anyone whether a number is taken, so hiding it here would protect nothing
@@ -302,5 +363,5 @@ def reset_password():
             fail(EXPIRED)  # another request used this code a moment ago
         con.execute("UPDATE users SET password_hash = ? WHERE id = ?", (generate_password_hash(password), row["user_id"]))
         con.execute("DELETE FROM tokens WHERE user_id = ?", (row["user_id"],))
-    current_app.extensions.get("jalsetu_login_failures", {}).pop(row["phone"], None)  # lift a wrong-password lockout
+    _clear_wrong_passwords(row["phone"])
     return _signed_in(row["user_id"], row["name"], row["phone"], row["role"])
