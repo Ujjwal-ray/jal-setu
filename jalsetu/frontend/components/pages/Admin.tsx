@@ -1,14 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { api, type AdminOverview, type AdminReview, type AdminSupplier, type Report, type Role } from "@/lib/api";
-import { ago, pct, REPORT_LABEL, rupee, STATUS_LABEL, tel } from "@/lib/format";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, ApiError, type AdminHealth, type AdminOverview, type AdminReview, type AdminSupplier, type HealthLevel, type Report, type Role } from "@/lib/api";
+import { ago, clockText, pct, REPORT_LABEL, rupee, STATUS_LABEL, tel, when } from "@/lib/format";
+import AadhaarReview from "../AadhaarReview";
 import { useApp } from "../AppProvider";
 import Certificate from "../Certificate";
 import { Icon } from "../Icons";
 import PageShell from "../PageShell";
 
-type Tab = "overview" | "suppliers" | "reports" | "verify" | "help";
+type Tab = "overview" | "suppliers" | "reports" | "verify" | "help" | "server";
 type Feedback = { reports: Report[]; reviews: AdminReview[] };
 type ResetCode = { code: string; expires: number; name: string; phone: string; role: Role };
 
@@ -18,7 +19,10 @@ const TABS: [Tab, string][] = [
   ["reports", "Reports & feedback"],
   ["verify", "Verification"],
   ["help", "Password help"],
+  ["server", "Server health"],
 ];
+const LEVEL_LABEL: Record<HealthLevel, string> = { ok: "OK", info: "Note", warn: "Check", bad: "Fix now" };
+const clock = (ms: number) => new Date(ms).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
 const REFRESH_MS = 30_000;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -48,7 +52,7 @@ function Overview({ o }: { o: AdminOverview }) {
       <h2 className="admin-h">Suppliers</h2>
       <ul className="stats">
         <Tile label="Delivering right now" value={s.delivering_now} sub={`with jars on the way · ${s.busy} handling orders`} />
-        <Tile label="Open for orders" value={s.in_stock} sub={`verified and in stock · ${s.awaiting} awaiting verification`} />
+        <Tile label="Open for orders" value={s.in_stock} sub={`open now and in stock · ${s.open_now} open in all · ${s.awaiting} awaiting verification`} />
         <Tile label="Online now" value={s.online} sub={`used the site in the last ${o.online_minutes} min`} />
         <Tile label="Signed in" value={s.signed_in} sub={`${s.signed_out} signed out · ${plural(s.accounts, "supplier account")}`} />
       </ul>
@@ -76,6 +80,28 @@ function Presence({ s }: { s: AdminSupplier }) {
   );
 }
 
+/** Today's opening and closing, and nights the shop was left open (it then closed itself at midnight). */
+function ShopHours({ s }: { s: AdminSupplier }) {
+  return (
+    <>
+      {s.open_since ? (
+        <span className="status-pill status-pill--ok">Open since {clockText(s.open_since)}</span>
+      ) : s.closed_today ? (
+        <span className="status-pill status-pill--na">Closed at {clockText(s.closed_today)}</span>
+      ) : (
+        <span className="status-pill status-pill--na">Not opened today</span>
+      )}
+      <small>{s.open_since ? (s.availability ? "in stock" : "out of stock") : s.availability ? "in stock at closing" : "out of stock"}</small>
+      {s.left_open_nights > 0 && (
+        <small className="bad">
+          Left open overnight {s.left_open_nights === 1 ? "once" : `${s.left_open_nights} times`} this week
+          {s.last_left_open && <> (last: {new Date(s.last_left_open * 1000).toLocaleDateString("en-IN", { day: "numeric", month: "short" })})</>}
+        </small>
+      )}
+    </>
+  );
+}
+
 function SupplierTable({ rows }: { rows: AdminSupplier[] }) {
   const sorted = [...rows].sort((a, b) => Number(b.online) - Number(a.online) || b.earned - a.earned);
   return (
@@ -87,6 +113,7 @@ function SupplierTable({ rows }: { rows: AdminSupplier[] }) {
             <tr>
               <th>Supplier</th>
               <th>Status</th>
+              <th>Shop today</th>
               <th>Orders</th>
               <th className="num">Earned</th>
               <th>Customer feedback</th>
@@ -99,9 +126,10 @@ function SupplierTable({ rows }: { rows: AdminSupplier[] }) {
                 <td>
                   <b>{s.business_name}</b>
                   <small>{s.owner_name} · <a href={tel(s.contact)}>{s.contact}</a></small>
-                  <small>{s.verified ? "Verified" : "Awaiting verification"} · {s.availability ? "in stock" : "out of stock"}</small>
+                  <small>{s.verified ? "Verified" : "Awaiting verification"}</small>
                 </td>
                 <td><Presence s={s} /></td>
+                <td><ShopHours s={s} /></td>
                 <td>
                   {plural(s.orders_total, "order")}
                   <small>{s.delivered} delivered · {s.active} in progress{s.on_the_way ? ` (${s.on_the_way} on the way)` : ""}</small>
@@ -212,28 +240,133 @@ function Reports({ fb, onChange }: { fb: Feedback; onChange: () => void }) {
   );
 }
 
-function Verification({ rows, onVerify }: { rows: AdminSupplier[]; onVerify: (s: AdminSupplier, v: boolean) => void }) {
+/** Where the owner's Aadhaar check stands. A shop can only be verified once it's approved. */
+function AadhaarLine({ s }: { s: AdminSupplier }) {
+  switch (s.aadhaar_status) {
+    case "approved":
+      return <span className="status-pill status-pill--ok">Aadhaar checked · XXXX {s.aadhaar_last4}</span>;
+    case "pending":
+      return <span className="status-pill status-pill--wait">Aadhaar waiting for you</span>;
+    case "rejected":
+      return <span className="status-pill status-pill--bad" title={s.aadhaar_note ?? undefined}>Aadhaar rejected · waiting for a new one</span>;
+    default:
+      return <span className="status-pill status-pill--na">{s.verified ? "Verified before Aadhaar checks" : "Aadhaar not sent yet"}</span>;
+  }
+}
+
+function Verification({ rows, onVerify, onChange }: { rows: AdminSupplier[]; onVerify: (s: AdminSupplier, v: boolean) => void; onChange: () => void }) {
+  const [review, setReview] = useState<AdminSupplier | null>(null);
   const pending = rows.filter((r) => !r.verified).length;
+  const toCheck = rows.filter((r) => r.aadhaar_status === "pending").length;
+  // Aadhaar waiting for a decision first; otherwise keep the server's order (unverified first)
+  const sorted = [...rows].sort((a, b) => Number(b.aadhaar_status === "pending") - Number(a.aadhaar_status === "pending"));
   return (
     <>
       <p className="center admin-sum">
-        {plural(rows.length, "supplier")} · <b>{pending} waiting for verification</b>. Only verified suppliers are shown to customers.
+        {plural(rows.length, "supplier")} · <b>{pending} waiting for verification</b>
+        {toCheck > 0 && <> · <b>{plural(toCheck, "Aadhaar check")} waiting</b></>}. A shop can be verified once you&apos;ve checked its
+        owner&apos;s Aadhaar. Only verified suppliers are shown to customers.
       </p>
       <ul className="admin-grid">
-        {rows.map((s) => (
+        {sorted.map((s) => (
           <li key={s.id}>
             <Certificate s={s} zoom={false} />
+            <AadhaarLine s={s} />
             <div className="admin-actions">
               <a className="pill pill--ghost" href={tel(s.contact)}>Call {s.contact}</a>
+              {s.aadhaar_status === "pending" && (
+                <button className="pill pill--navy" onClick={() => setReview(s)}>Check Aadhaar</button>
+              )}
               {s.verified ? (
                 <button className="pill pill--danger" onClick={() => onVerify(s, false)}>Unverify</button>
               ) : (
-                <button className="pill pill--ok" onClick={() => onVerify(s, true)}>Verify</button>
+                s.aadhaar_status === "approved" && <button className="pill pill--ok" onClick={() => onVerify(s, true)}>Verify</button>
               )}
             </div>
           </li>
         ))}
       </ul>
+      {review && (
+        <AadhaarReview
+          s={review}
+          onClose={() => setReview(null)}
+          onDone={() => {
+            setReview(null);
+            onChange();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/** Is the backend healthy: database, disk, crashes, SMS, risky settings (backend/health.py). */
+function ServerHealth({ h }: { h: AdminHealth | null }) {
+  const monitorUrl = (typeof window === "undefined" ? "" : window.location.origin) + "/api/health";
+  return (
+    <>
+      {!h ? (
+        <div className="gate glass"><p>Can&apos;t get the server&apos;s health right now. If the red bar above is showing, the server isn&apos;t answering at all.</p></div>
+      ) : (
+        <>
+          <p className="admin-sum">
+            Server started {ago(h.started)}. These checks refresh with the rest of the page.
+          </p>
+          <ul className="health">
+            {h.checks.map((c) => (
+              <li key={c.title} className={"health-item glass health-item--" + c.level}>
+                <span className="health-dot" aria-hidden="true" />
+                <div>
+                  <b>{c.title}</b>
+                  <p>{c.detail}</p>
+                </div>
+                <span className="health-level">{LEVEL_LABEL[c.level]}</span>
+              </li>
+            ))}
+          </ul>
+
+          <h2 className="admin-h">Recent crashes</h2>
+          {h.errors.length === 0 ? (
+            <div className="gate glass"><p>No request crashed in the last 7 days.</p></div>
+          ) : (
+            <div className="table-wrap glass">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Request</th>
+                    <th>What went wrong</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {h.errors.map((e, i) => (
+                    <tr key={i}>
+                      <td>{when(e.ts)}</td>
+                      <td>{e.method} {e.path}</td>
+                      <td className="crash-error">{e.error}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="muted">The full details of each crash are in the backend&apos;s terminal (its log).</p>
+        </>
+      )}
+
+      <h2 className="admin-h">Alerts when nobody is watching</h2>
+      <div className="monitor glass">
+        <p>
+          This page can only warn you while it&apos;s open, and a server that has stopped can&apos;t send a warning itself.
+          So once JalSetu is online, sign up for a free uptime monitor (for example UptimeRobot or Better Stack) and give it
+          this address:
+        </p>
+        <code className="monitor-url">{monitorUrl}</code>
+        <p>
+          It checks every few minutes and texts or emails you when the answer isn&apos;t <code>{'{"ok": true}'}</code>: when the
+          website, the backend behind it or the database stops working.
+        </p>
+      </div>
     </>
   );
 }
@@ -295,6 +428,9 @@ export default function Admin() {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [rows, setRows] = useState<AdminSupplier[] | null>(null);
   const [fb, setFb] = useState<Feedback | null>(null);
+  const [health, setHealth] = useState<AdminHealth | null>(null);
+  const [down, setDown] = useState<number | null>(null); // when the server stopped answering (ms), or null
+  const downSince = useRef<number | null>(null);
 
   const load = useCallback(() => {
     Promise.all([api<AdminOverview>("/admin/overview"), api<AdminSupplier[]>("/admin/suppliers"), api<Feedback>("/admin/feedback")])
@@ -302,8 +438,23 @@ export default function Admin() {
         setOverview(o);
         setRows(s);
         setFb(f);
+        if (downSince.current) toast("The server is answering again");
+        downSince.current = null;
+        setDown(null);
       })
-      .catch((e) => toast(e.message));
+      .catch((e) => {
+        // no answer, or the website couldn't reach the backend: a red bar that stays, not a pop-up every 30 seconds
+        const status = e instanceof ApiError ? e.status : 0;
+        if (status === 0 || status >= 500) {
+          downSince.current ??= Date.now();
+          setDown(downSince.current);
+        } else {
+          toast(e.message);
+        }
+      });
+    api<AdminHealth>("/admin/health")
+      .then(setHealth)
+      .catch(() => setHealth(null));
   }, [toast]);
 
   // live numbers: reload every 30 s while the tab is visible
@@ -324,11 +475,29 @@ export default function Admin() {
     }
   }
 
-  const badge: Partial<Record<Tab, number>> = { reports: overview?.feedback.reports_open, verify: overview?.suppliers.awaiting };
+  const urgent = health?.checks.filter((c) => c.level === "bad") ?? [];
+  const badge: Partial<Record<Tab, number>> = {
+    reports: overview?.feedback.reports_open,
+    verify: overview?.suppliers.awaiting,
+    server: health?.checks.filter((c) => c.level === "bad" || c.level === "warn").length,
+  };
   const updated = overview && new Date(overview.generated_at * 1000).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", second: "2-digit" });
 
   return (
     <PageShell title="Admin dashboard" sub="Orders, suppliers and customer feedback across JalSetu" roles={["admin"]}>
+      {down ? (
+        <div className="server-alert server-alert--down" role="alert">
+          <b>The JalSetu server isn&apos;t answering</b> (since {clock(down)}). Customers probably can&apos;t use the site
+          either. Checking again every 30 seconds.
+        </div>
+      ) : (
+        urgent.length > 0 && (
+          <div className="server-alert" role="status">
+            <b>Server needs attention:</b> {urgent.map((c) => c.title).join(", ")}.
+            {tab !== "server" && <button className="link-btn" onClick={() => setTab("server")}>Open Server health</button>}
+          </div>
+        )
+      )}
       <div className="tabs" role="tablist" aria-label="Admin sections">
         {TABS.map(([id, label]) => (
           <button key={id} role="tab" id={"tab-" + id} aria-selected={tab === id} aria-controls="admin-panel" className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
@@ -344,7 +513,9 @@ export default function Admin() {
         </p>
       )}
       <div id="admin-panel" role="tabpanel" aria-labelledby={"tab-" + tab}>
-        {!overview || !rows || !fb ? (
+        {tab === "server" ? (
+          <ServerHealth h={health} />
+        ) : !overview || !rows || !fb ? (
           <p className="muted center">Loading…</p>
         ) : tab === "overview" ? (
           <Overview o={overview} />
@@ -355,7 +526,7 @@ export default function Admin() {
         ) : tab === "help" ? (
           <PasswordHelp />
         ) : (
-          <Verification rows={rows} onVerify={verify} />
+          <Verification rows={rows} onVerify={verify} onChange={load} />
         )}
       </div>
     </PageShell>
