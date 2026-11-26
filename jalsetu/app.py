@@ -5,7 +5,8 @@
     flask --app app reset-password LOGIN -> set a new password for any account (admins included)
 
 Environment: JALSETU_DB (database file), JALSETU_SEED=0 (no demo data), HOST, PORT, JALSETU_DEBUG=1,
-JALSETU_SMS (how reset codes are texted; default "console" prints them here, see backend/sms.py).
+JALSETU_SMS (how phone codes are texted; default "console" prints them here, see backend/sms.py),
+JALSETU_VERIFY_PHONES=0 (sign up without a texted code), JALSETU_SMS_DAILY_LIMIT (texts per 24 hours, default 200).
 """
 import os
 
