@@ -24,6 +24,16 @@ export const phoneText = (n: string) => (n.length === 10 ? `${n.slice(0, 5)} ${n
 export const deliveryText = (s: Pick<Supplier, "delivery_charge">) =>
   s.delivery_charge ? `${rupee(s.delivery_charge)} delivery` : "Free delivery";
 
+/** Customers can order from a shop only while it's open today and has jars in stock (the server checks this too). */
+export const canOrder = (s: Pick<Supplier, "open_since" | "availability">) => !!s.open_since && !!s.availability;
+
+/** "In stock now", "Out of stock" or "Closed now": what a customer needs to know before ordering. */
+export const stockText = (s: Pick<Supplier, "open_since" | "availability">) =>
+  !s.open_since ? "Closed now" : s.availability ? "In stock now" : "Out of stock";
+
+/** 1795697138 -> "9:05 am" (India time on an Indian phone). */
+export const clockText = (ts: number) => new Date(ts * 1000).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
+
 export const STATUS_LABEL: Record<OrderStatus, string> = {
   pending: "Requested",
   accepted: "Accepted",
