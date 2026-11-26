@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api, type SupplierDetail } from "@/lib/api";
-import { deliveryText, km, rupee, tel, when, whatsapp } from "@/lib/format";
+import { canOrder, clockText, deliveryText, km, rupee, stockText, tel, when, whatsapp } from "@/lib/format";
 import { Icon } from "./Icons";
 import Modal from "./Modal";
 import RoundButton from "./RoundButton";
@@ -51,11 +51,12 @@ export default function SupplierModal({
               <li><span className="drop-badge drop-badge--sm"><Icon.drop /></span>{s.address || "Address on request"}</li>
               <li>
                 <span className="drop-badge drop-badge--sm"><Icon.drop /></span>
-                <span className={s.availability ? "ok" : "bad"}>{s.availability ? "In stock now" : "Out of stock"}</span>
+                <span className={canOrder(s) ? "ok" : "bad"}>{stockText(s)}</span>
+                {s.open_since ? ` · open since ${clockText(s.open_since)}` : " · you can order once the owner opens the shop"}
               </li>
             </ul>
             <div className="slide-actions">
-              <RoundButton size="md" disabled={!s.availability} onClick={() => onOrder(s.id)}>Order</RoundButton>
+              <RoundButton size="md" disabled={!canOrder(s)} onClick={() => onOrder(s.id)}>Order</RoundButton>
               <div className="slide-links">
                 <a className="pill pill--navy" href={tel(s.contact)}><Icon.phone width={16} height={16} /> {s.contact}</a>
                 {wa && <a className="pill pill--wa" href={wa} target="_blank" rel="noreferrer"><Icon.chat width={16} height={16} /> WhatsApp</a>}
