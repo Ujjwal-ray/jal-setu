@@ -20,7 +20,14 @@ export type Supplier = {
   rating: number | null;
   review_count: number;
   distance_km?: number | null;
+  /** when the shop opened today (Unix seconds); null while it's closed. Customers can only order from open shops. */
+  open_since: number | null;
 };
+
+/** One opening of a supplier's shop today, and its closing (closed: null while still open). */
+export type ShopSession = { opened: number; open_stock: 0 | 1; closed: number | null; close_stock: 0 | 1 | null; closed_by: "owner" | "auto" | null };
+/** The supplier's own view of today (backend/shop_hours.py). */
+export type ShopDay = { open: boolean; today: ShopSession[]; left_open_last_night: boolean };
 
 export type Review = { rating: number; comment: string; ts: number; name: string };
 export type SupplierDetail = Supplier & { reviews: Review[] };
@@ -88,7 +95,24 @@ export type AdminReview = {
   business_name: string;
 };
 
+export type AadhaarStatus = "pending" | "approved" | "rejected";
+/** A shop owner's Aadhaar check (backend/aadhaar.py). `note` is the admin's reason when it was rejected. */
+export type AadhaarCheck = { status: AadhaarStatus; name: string; last4: string; note: string; submitted: number; decided: number | null };
+/** What an admin sees while deciding: the check plus its picture as a data: URL (null once decided). */
+export type AadhaarReview = AadhaarCheck & { image: string | null };
+
 export type AdminSupplier = Supplier & {
+  aadhaar_status: AadhaarStatus | null;
+  aadhaar_name: string | null;
+  aadhaar_last4: string | null;
+  aadhaar_note: string | null;
+  aadhaar_submitted: number | null;
+  /** when the owner last closed the shop today, if they did */
+  closed_today: number | null;
+  /** nights in the last 7 days the shop was left open and closed itself at midnight */
+  left_open_nights: number;
+  /** when the latest of those openings was */
+  last_left_open: number | null;
   owner_name: string | null;
   owner_phone: string | null;
   last_seen: number | null;
@@ -105,6 +129,17 @@ export type AdminSupplier = Supplier & {
   open_reports: number;
 };
 
+/** "info" = fine on your own computer, matters once the site is online. */
+export type HealthLevel = "ok" | "info" | "warn" | "bad";
+/** The admin's Server health tab (backend/health.py). */
+export type AdminHealth = {
+  checks: { level: HealthLevel; title: string; detail: string }[];
+  /** requests that crashed in the last 7 days, newest first */
+  errors: { ts: number; method: string; path: string; error: string }[];
+  started: number | null;
+  now: number;
+};
+
 export type AdminOverview = {
   customers: { total: number; served: number; ordering_now: number };
   orders: { total: number; active: number; by_status: Partial<Record<OrderStatus, number>> };
@@ -114,7 +149,9 @@ export type AdminOverview = {
     listed: number;
     verified: number;
     awaiting: number;
+    /** verified, open now and in stock */
     in_stock: number;
+    open_now: number;
     delivering_now: number;
     busy: number;
     signed_in: number;
@@ -169,15 +206,16 @@ export class ApiError extends Error {
   }
 }
 
-/** `timeoutMs`: give up after this long, so a request stuck on a bad connection can't block the next auto-refresh. */
-export async function api<T>(path: string, opt: { method?: string; body?: unknown; timeoutMs?: number } = {}): Promise<T> {
+/** `timeoutMs`: give up after this long, so a request stuck on a bad connection can't block the next auto-refresh.
+ *  `form`: send a form with a file in it instead of JSON. The browser then writes the Content-Type itself. */
+export async function api<T>(path: string, opt: { method?: string; body?: unknown; form?: FormData; timeoutMs?: number } = {}): Promise<T> {
   const { token } = readSession();
   let r: Response;
   try {
     r = await fetch("/api" + path, {
       method: opt.method || "GET",
-      headers: { "Content-Type": "application/json", ...(token ? { Authorization: "Bearer " + token } : {}) },
-      body: opt.body !== undefined ? JSON.stringify(opt.body) : undefined,
+      headers: { ...(opt.form ? {} : { "Content-Type": "application/json" }), ...(token ? { Authorization: "Bearer " + token } : {}) },
+      body: opt.form ?? (opt.body !== undefined ? JSON.stringify(opt.body) : undefined),
       signal: opt.timeoutMs ? AbortSignal.timeout(opt.timeoutMs) : undefined,
     });
   } catch {
