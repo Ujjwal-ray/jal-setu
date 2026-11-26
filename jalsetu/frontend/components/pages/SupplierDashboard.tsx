@@ -6,12 +6,14 @@ import { api, type Order, type OrderStatus, type Supplier } from "@/lib/api";
 import { chime } from "@/lib/chime";
 import { rupee, slotText, tel, when } from "@/lib/format";
 import { usePoll } from "@/lib/usePoll";
+import AadhaarCard from "../AadhaarCard";
 import { useApp } from "../AppProvider";
 import { Icon } from "../Icons";
 import LiveNote from "../LiveNote";
 import PageShell from "../PageShell";
 import ReportModal from "../ReportModal";
 import RoundButton from "../RoundButton";
+import ShopToday from "../ShopToday";
 import StatusTrack from "../StatusTrack";
 
 const PinPicker = dynamic(() => import("../SupplierMap").then((m) => m.PinPicker), {
@@ -126,7 +128,7 @@ export default function SupplierDashboard() {
     try {
       const l = await api<Supplier>("/my-listing", { method: "PUT", body: { ...f, lat: pin[0], lng: pin[1] } });
       setListing(l);
-      toast(l.verified ? "Listing updated" : "Listing saved — an admin will verify it soon");
+      toast(l.verified ? "Listing updated" : "Listing saved. An admin will verify it once they've checked your Aadhaar");
     } catch (e) {
       toast((e as Error).message);
     } finally {
@@ -145,6 +147,11 @@ export default function SupplierDashboard() {
   }
 
   const set = (p: Partial<Form>) => f && setF({ ...f, ...p });
+  // opening or closing the shop sets the stock, so the listing form mustn't later save its older answer over it
+  const setStock = useCallback((inStock: boolean) => {
+    setF((cur) => cur && { ...cur, availability: inStock });
+    setListing((l) => l && { ...l, availability: inStock ? 1 : 0 });
+  }, []);
   const pending = orders.filter((o) => o.status === "pending").length;
   const stats = useMemo(() => summarize(orders), [orders]);
   const loaded = listing !== undefined;
@@ -183,6 +190,9 @@ export default function SupplierDashboard() {
           <span className="stat-sub">{rupee(stats.earnedThisMonth)} from this month&apos;s orders</span>
         </li>
       </ul>
+      {/* opening the shop and the Aadhaar check belong to a shop, so they appear once the listing has been saved */}
+      {listing && <ShopToday verified={!!listing.verified} onStock={setStock} />}
+      {listing && <AadhaarCard verified={!!listing.verified} />}
       <div className="dash">
         <section className="water water--card" aria-labelledby="listing-title">
           <div className="water-bg" aria-hidden="true">
@@ -237,7 +247,7 @@ export default function SupplierDashboard() {
           <LiveNote stale={stale}>Live · new requests appear here by themselves</LiveNote>
           {orders.length === 0 ? (
             <div className="gate glass">
-              <p>{listing?.verified ? "No requests yet. They will appear here as customers order." : "Once an admin verifies your listing, customers can find you and send requests."}</p>
+              <p>{listing?.verified ? "No requests yet. They will appear here as customers order." : "Once an admin has checked your Aadhaar and verified your listing, customers can find you and send requests."}</p>
             </div>
           ) : (
             <ul className="orders">
