@@ -19,13 +19,16 @@ Point the frontend at a backend somewhere else with `JALSETU_API=http://host:por
 Demo logins: customer 9000000001 / demo123 | supplier 9000000100 / supplier123 | admin / admin123
 Delete `jalsetu.db` to reset seed data.
 
-## Forgotten passwords
+## Phone codes: sign-up and forgotten passwords
 
-- **Self-service:** Sign in → *Forgot password?* texts a 6-digit code (valid 15 minutes, 5 tries, 3 codes per hour). No SMS provider is connected yet, so the code is printed in the terminal running `python app.py`. To text real phones, add a provider in `backend/sms.py` and set `JALSETU_SMS`.
-- **Admin help:** someone who can't get the SMS calls JalSetu. After checking it's them, an admin opens *Password help* on `/admin`, creates a code and reads it out. They enter it under *Forgot password? → I already have a code*.
+JalSetu texts a 6-digit code to prove a person holds their phone number. A code is valid for 15 minutes and allows 5 wrong tries, and each number can ask for 3 codes per hour. No SMS provider is connected yet, so codes are printed in the terminal running `python app.py`. To text real phones, add a provider in `backend/sms.py` and set `JALSETU_SMS`.
+
+- **Sign-up:** *Create an account* texts a code; the account is created only once the code is entered. To let people sign up without a code (for example, when the site is online before an SMS provider is set up), set `JALSETU_VERIFY_PHONES=0`.
+- **Forgotten password, self-service:** Sign in → *Forgot password?* texts a code.
+- **Forgotten password, admin help:** someone who can't get the SMS calls JalSetu. After checking it's them, an admin opens *Password help* on `/admin`, creates a code and reads it out. They enter it under *Forgot password? → I already have a code*.
 - **Admins:** `flask --app app reset-password LOGIN` on the server.
 
-Setting a new password signs the account out on every other device.
+Setting a new password signs the account out on every other device. At most `JALSETU_SMS_DAILY_LIMIT` texts (default 200) go out in any 24 hours, which caps the SMS bill if someone floods the forms.
 
 ## Pages
 
