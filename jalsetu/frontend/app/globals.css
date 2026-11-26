@@ -2312,6 +2312,328 @@ select.wf-input {
   justify-content: center;
   gap: 8px;
 }
+.pill:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+.status-pill--na {
+  background: #eef3f9;
+  color: var(--muted);
+}
+
+/* supplier dashboard: "Your shop today", opened in the morning and closed at night */
+.shop-day {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+  margin: 0 0 24px;
+  padding: 20px clamp(18px, 3vw, 30px);
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.shop-day--open {
+  box-shadow: inset 5px 0 0 var(--ok), 0 24px 60px rgba(20, 70, 140, 0.14);
+}
+.shop-day-main {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+.shop-day .dash-h {
+  flex-wrap: wrap;
+  margin: 0 0 6px;
+}
+.shop-day p {
+  max-width: 760px;
+  margin: 6px 0 0;
+}
+.shop-day-warn {
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #fdeccf;
+  color: #7a4800;
+}
+.shop-day-log {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+.shop-day-log li + li {
+  margin-top: 2px;
+}
+.shop-day > .pill {
+  height: 48px;
+  padding: 0 26px;
+  font-size: 17px;
+}
+.admin-table small.bad {
+  color: var(--bad);
+}
+
+/* admin: the bar shown when the server isn't answering or needs attention, and the Server health tab */
+.server-alert {
+  margin: 0 0 16px;
+  padding: 12px 18px;
+  border-radius: 16px;
+  background: #fdeccf;
+  color: #7a4800;
+  font-size: 16px;
+  line-height: 1.45;
+}
+.server-alert--down {
+  background: #fde4e4;
+  color: #8f1d14;
+}
+.server-alert .link-btn {
+  margin: 0 0 0 6px;
+  font-size: 16px;
+  color: inherit;
+}
+.health {
+  list-style: none;
+  margin: 0 0 32px;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.health-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 20px;
+  border-radius: 18px;
+}
+.health-item > div {
+  flex: 1;
+  min-width: 0;
+}
+.health-item b {
+  font-weight: 600;
+  color: var(--navy-800);
+}
+.health-item p {
+  margin: 4px 0 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+.health-dot {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+.health-level {
+  flex: none;
+  padding: 3px 11px;
+  border-radius: 999px;
+  background: #dcf5e7;
+  color: var(--ok);
+  font-size: 13px;
+  font-weight: 500;
+}
+.health-item--info .health-dot {
+  background: var(--blue-300);
+}
+.health-item--info .health-level {
+  background: #eef3f9;
+  color: var(--muted);
+}
+.health-item--warn .health-dot {
+  background: #e59a1a;
+}
+.health-item--warn .health-level {
+  background: #fdeccf;
+  color: #9a5b00;
+}
+.health-item--bad .health-dot {
+  background: var(--bad);
+}
+.health-item--bad .health-level {
+  background: #fde4e4;
+  color: #b42318;
+}
+.crash-error {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.monitor {
+  max-width: 820px;
+  padding: 20px 24px;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.monitor p {
+  margin: 0;
+}
+.monitor-url {
+  display: block;
+  margin: 12px 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--navy-800);
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+/* the owner's Aadhaar: the card on the supplier dashboard, and the admin's review window */
+.aadhaar {
+  margin: 0 0 32px;
+  padding: 22px clamp(18px, 3vw, 30px) 26px;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.aadhaar .dash-h {
+  flex-wrap: wrap;
+  margin: 0 0 6px;
+}
+.aadhaar p {
+  max-width: 760px;
+  margin: 8px 0 0;
+}
+.aadhaar a {
+  color: var(--navy-800);
+  font-weight: 500;
+}
+.aadhaar .link-btn {
+  margin-top: 8px;
+  padding-left: 0;
+}
+.aadhaar-reason {
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #fff1f0;
+  color: #b42318;
+}
+.aadhaar-form .wf-label {
+  margin: 18px 0 8px;
+  font-size: 17px;
+}
+.aadhaar-form .wf-input {
+  text-align: left;
+}
+.aadhaar-form .wf-input--code {
+  text-align: center;
+}
+.aadhaar-file {
+  display: block;
+  max-width: 100%;
+  font-size: 15px;
+  color: var(--ink);
+}
+.aadhaar-preview {
+  max-width: min(360px, 100%);
+  max-height: 240px;
+  margin-top: 12px;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(10, 50, 110, 0.2);
+}
+.aadhaar-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 620px;
+  margin: 20px 0 0;
+  font-size: 16px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.aadhaar-consent input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+}
+.aadhaar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+.aadhaar-modal {
+  text-align: left;
+  color: var(--ink);
+}
+.aadhaar-modal .modal-note {
+  max-width: none;
+}
+.aadhaar-review {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 24px;
+  margin-top: 20px;
+}
+.aadhaar-photo {
+  width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 2px 10px rgba(10, 50, 110, 0.2);
+}
+.aadhaar-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 14px;
+  margin: 0;
+  font-size: 16px;
+}
+.aadhaar-facts dt {
+  color: var(--ink-soft);
+}
+.aadhaar-facts dd {
+  margin: 0;
+  font-weight: 500;
+  color: var(--navy-900);
+  overflow-wrap: anywhere;
+}
+.aadhaar-rules-h {
+  margin: 18px 0 0;
+  font-weight: 600;
+  color: var(--navy-800);
+}
+.aadhaar-rules {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  font-size: 15px;
+  line-height: 1.45;
+}
+.aadhaar-rules li + li {
+  margin-top: 5px;
+}
+.aadhaar-reject .wf-label {
+  margin: 20px 0 10px;
+  font-size: 17px;
+}
+.aadhaar-reject .chips {
+  max-width: none;
+}
+.aadhaar-reject .wf-textarea {
+  width: 100%;
+  margin-top: 12px;
+  font-size: 16px;
+}
+.aadhaar-small {
+  margin: 14px 0 0;
+  font-size: 14px;
+}
+@media (max-width: 700px) {
+  .aadhaar-review {
+    grid-template-columns: 1fr;
+  }
+}
 
 /* ------------------------------------------------------------------ toast */
 .toast {
