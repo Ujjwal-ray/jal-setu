@@ -133,8 +133,70 @@ def _v5_signup_codes(con):
     con.execute("CREATE INDEX IF NOT EXISTS signup_codes_phone ON signup_codes(phone)")
 
 
+def _v6_attempts(con):
+    # one row per try that counts toward a limit in auth.py LIMITS: a wrong password (per account and per internet
+    # address), a sign-up or a reset text (per address). Kept here rather than in the server's memory, so a restart
+    # doesn't wipe the counts and every server process sees the same ones. Rows older than an hour are deleted.
+    con.execute("""CREATE TABLE IF NOT EXISTS attempts(id INTEGER PRIMARY KEY, kind TEXT NOT NULL, key TEXT NOT NULL,
+        ts INTEGER NOT NULL)""")
+    con.execute("CREATE INDEX IF NOT EXISTS attempts_kind_key ON attempts(kind, key, ts)")
+
+
+def _v7_aadhaar_checks(con):
+    # who runs each shop: the owner sends a picture of a masked Aadhaar (only the last 4 digits showing) and an
+    # admin checks it (status pending -> approved or rejected). The picture is deleted once the admin decides;
+    # the name and last 4 digits stay. The full 12-digit number is never stored. One row per shop.
+    # A table of its own, not columns on suppliers: the public supplier search sends every suppliers column.
+    con.execute("""CREATE TABLE IF NOT EXISTS aadhaar_checks(supplier_id INTEGER PRIMARY KEY, name TEXT NOT NULL,
+        last4 TEXT NOT NULL, image BLOB, image_type TEXT, status TEXT NOT NULL DEFAULT 'pending',
+        note TEXT NOT NULL DEFAULT '', submitted INTEGER NOT NULL, decided INTEGER, decided_by INTEGER)""")
+
+
+def _v8_server_errors(con):
+    # requests that crashed (answered 500), for the admin's "Server health" tab: when, which address, and what
+    # went wrong. Never the request's body, which could hold a password. Rows older than 7 days are deleted.
+    con.execute("""CREATE TABLE IF NOT EXISTS server_errors(id INTEGER PRIMARY KEY, ts INTEGER NOT NULL,
+        method TEXT NOT NULL, path TEXT NOT NULL, error TEXT NOT NULL)""")
+
+
+def _v9_shop_hours(con):
+    # each time a supplier opens their shop, and closes it again (shop_hours.py). The stock they reported at
+    # each moment (1 in stock, 0 out of stock). closed_by: 'owner', or 'auto' when it was left open and closed
+    # itself at midnight. A row with closed empty is a shop that is open right now.
+    con.execute("""CREATE TABLE IF NOT EXISTS shop_hours(id INTEGER PRIMARY KEY, supplier_id INTEGER NOT NULL,
+        opened INTEGER NOT NULL, open_stock INTEGER NOT NULL, closed INTEGER, close_stock INTEGER, closed_by TEXT)""")
+    con.execute("CREATE INDEX IF NOT EXISTS shop_hours_supplier ON shop_hours(supplier_id, opened)")
+
+
+def _v10_payments(con):
+    # paying for orders (payments.py). Each order keeps JalSetu's fee as it was when ordered, when the customer
+    # confirmed they received the jars, and how it was paid. Orders from before this step keep payment_status
+    # empty: nobody knows how those were paid, so they are left out of payments and fees.
+    have = _columns(con, "orders")
+    for col, kind in (("service_fee", "REAL"), ("received_at", "INTEGER"), ("payment_status", "TEXT"),
+                      ("payment_method", "TEXT"), ("paid_at", "INTEGER")):
+        if col not in have:
+            con.execute(f"ALTER TABLE orders ADD COLUMN {col} {kind}")
+    # each try at paying an order online. supplier_amount: what Razorpay sends on to the supplier's bank;
+    # fee_recovered: JalSetu fees from earlier cash orders kept back from this payment. status: created, paid,
+    # or duplicate (paid although the order was already paid: the admin refunds it in Razorpay)
+    con.execute("""CREATE TABLE IF NOT EXISTS payments(id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL,
+        provider TEXT NOT NULL, provider_order_id TEXT NOT NULL UNIQUE, amount REAL NOT NULL,
+        supplier_amount REAL NOT NULL, fee_recovered REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'created',
+        created INTEGER NOT NULL, paid_at INTEGER, provider_payment_id TEXT)""")
+    con.execute("CREATE INDEX IF NOT EXISTS payments_order ON payments(order_id)")
+    # each supplier's Razorpay "linked account": where Razorpay sends their share. Its own table, because the
+    # public supplier search sends every suppliers column.
+    con.execute("""CREATE TABLE IF NOT EXISTS payout_accounts(supplier_id INTEGER PRIMARY KEY,
+        razorpay_account TEXT NOT NULL, updated INTEGER NOT NULL, updated_by INTEGER)""")
+    # fees a supplier owed from cash orders and paid to JalSetu directly, as recorded by an admin
+    con.execute("""CREATE TABLE IF NOT EXISTS fee_settlements(id INTEGER PRIMARY KEY, supplier_id INTEGER NOT NULL,
+        amount REAL NOT NULL, note TEXT NOT NULL DEFAULT '', ts INTEGER NOT NULL, by_admin INTEGER NOT NULL)""")
+
+
 MIGRATIONS = [_v1_prototype, _v2_snapshots_reviews_sessions, _v3_activity_and_feedback, _v4_password_resets,
-              _v5_signup_codes]
+              _v5_signup_codes, _v6_attempts, _v7_aadhaar_checks, _v8_server_errors, _v9_shop_hours,
+              _v10_payments]
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
