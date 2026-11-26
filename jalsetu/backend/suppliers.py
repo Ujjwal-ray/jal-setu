@@ -6,28 +6,37 @@ from flask import Blueprint, g, jsonify, request
 
 from . import db
 from .auth import auth
+from .shop_hours import day_start
 from .util import body, fail, km, normalize_phone, number, query_float, text
 
 bp = Blueprint("suppliers", __name__)
 
+# open_since: when the shop opened today (shop_hours.py), or null while it's closed
 SUPPLIER_SQL = """SELECT s.*, p.price, p.delivery_charge, p.availability, p.jar_size,
   (SELECT ROUND(AVG(rating), 1) FROM reviews r WHERE r.supplier_id = s.id) rating,
-  (SELECT COUNT(*) FROM reviews r WHERE r.supplier_id = s.id) review_count
+  (SELECT COUNT(*) FROM reviews r WHERE r.supplier_id = s.id) review_count,
+  (SELECT h.opened FROM shop_hours h WHERE h.supplier_id = s.id AND h.closed IS NULL AND h.opened >= ?) open_since
   FROM suppliers s LEFT JOIN products p ON p.supplier_id = s.id"""
 
 NO_PRICE = float("inf")
 
 
+def _suppliers(where, args=(), one=False):
+    """SUPPLIER_SQL rows matching `where`. The first ? (start of today, for open_since) is filled in here."""
+    return db.query(f"{SUPPLIER_SQL} WHERE {where}", (day_start(),) + args, one=one)
+
+
 @bp.get("/suppliers")
 def search():
-    """Verified suppliers. Query: lat, lng, max_km, min_price, max_price, available=1, q, sort=distance|price."""
+    """Verified suppliers, open shops first. Query: lat, lng, max_km, min_price, max_price,
+    available=1 (only shops that are open and in stock), q, sort=distance|price."""
     lat, lng = query_float("lat"), query_float("lng")
     max_km, min_price, max_price = query_float("max_km"), query_float("min_price"), query_float("max_price")
     term = (request.args.get("q") or "").lower().strip()
     in_stock_only = request.args.get("available") == "1"
 
     found = []
-    for s in db.query(SUPPLIER_SQL + " WHERE s.verified = 1"):
+    for s in _suppliers("s.verified = 1"):
         s["distance_km"] = round(km(lat, lng, s["lat"], s["lng"]), 2) if lat is not None and lng is not None else None
         price = s["price"] if s["price"] is not None else NO_PRICE
         # a limit of 0 (or none) means "any", matching the frontend filters
@@ -37,7 +46,7 @@ def search():
             continue
         if min_price and price < min_price:
             continue
-        if in_stock_only and not s["availability"]:
+        if in_stock_only and not (s["open_since"] and s["availability"]):
             continue
         if term and term not in " ".join(filter(None, (s["business_name"], s["service_area"], s["address"]))).lower():
             continue
@@ -50,13 +59,13 @@ def search():
         return s["price"] if s["price"] is not None else NO_PRICE
 
     keys = (by_price, by_distance) if request.args.get("sort") == "price" else (by_distance, by_price)
-    found.sort(key=lambda s: (keys[0](s), keys[1](s), s["id"]))
+    found.sort(key=lambda s: (s["open_since"] is None, keys[0](s), keys[1](s), s["id"]))  # open shops first
     return jsonify(found)
 
 
 @bp.get("/suppliers/<int:sid>")
 def detail(sid):
-    s = db.query(SUPPLIER_SQL + " WHERE s.id = ? AND s.verified = 1", (sid,), one=True)
+    s = _suppliers("s.id = ? AND s.verified = 1", (sid,), one=True)
     if not s:
         fail("Supplier not found", 404)
     s["reviews"] = db.query("""SELECT r.rating, r.comment, r.ts, u.name FROM reviews r JOIN users u ON u.id = r.user_id
@@ -100,7 +109,7 @@ def add_review(sid):
 @bp.get("/my-listing")
 @auth("supplier")
 def my_listing():
-    return jsonify(db.query(SUPPLIER_SQL + " WHERE s.user_id = ?", (g.user["id"],), one=True))
+    return jsonify(_suppliers("s.user_id = ?", (g.user["id"],), one=True))
 
 
 @bp.put("/my-listing")
@@ -136,4 +145,4 @@ def save_listing():
         if not updated:
             con.execute("INSERT INTO products(supplier_id,price,delivery_charge,availability) VALUES(?,?,?,?)",
                         (sid, price, delivery, in_stock))
-    return jsonify(db.query(SUPPLIER_SQL + " WHERE s.id = ?", (sid,), one=True))
+    return jsonify(_suppliers("s.id = ?", (sid,), one=True))
