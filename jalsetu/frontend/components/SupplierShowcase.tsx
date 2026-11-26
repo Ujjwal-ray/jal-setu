@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import type { Filters, Loc, Supplier } from "@/lib/api";
-import { deliveryText, km, rupee, tel, whatsapp } from "@/lib/format";
+import { canOrder, deliveryText, km, rupee, stockText, tel, whatsapp } from "@/lib/format";
 import { Icon } from "./Icons";
 import RoundButton from "./RoundButton";
 
@@ -85,7 +85,7 @@ export default function SupplierShowcase({
         </label>
         <label className="f-check">
           <input type="checkbox" checked={filters.available} onChange={(e) => set({ available: e.target.checked })} />
-          <span>In stock only</span>
+          <span>Open and in stock</span>
         </label>
       </div>
 
@@ -114,12 +114,12 @@ export default function SupplierShowcase({
                 <br />
                 Serves {s.service_area || "nearby areas"}.
                 <br />
-                <span className={s.availability ? "ok" : "bad"}>{s.availability ? "In stock now" : "Out of stock"}</span>
+                <span className={canOrder(s) ? "ok" : "bad"}>{stockText(s)}</span>
                 {" · "}
                 {s.rating ? <>★ {s.rating} ({s.review_count} {s.review_count === 1 ? "review" : "reviews"})</> : "No ratings yet"}
               </p>
               <div className="slide-actions">
-                <RoundButton size="md" onClick={() => onOrder(s.id)} disabled={!s.availability}>Order</RoundButton>
+                <RoundButton size="md" onClick={() => onOrder(s.id)} disabled={!canOrder(s)}>Order</RoundButton>
                 <div className="slide-links">
                   <a className="pill pill--navy" href={tel(s.contact)}><Icon.phone width={16} height={16} /> Call</a>
                   {wa && <a className="pill pill--wa" href={wa} target="_blank" rel="noreferrer"><Icon.chat width={16} height={16} /> WhatsApp</a>}
