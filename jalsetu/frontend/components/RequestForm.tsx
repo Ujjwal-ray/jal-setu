@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type Supplier } from "@/lib/api";
-import { km, rupee } from "@/lib/format";
+import { canOrder, km, rupee } from "@/lib/format";
 import { useApp } from "./AppProvider";
 import { Icon } from "./Icons";
 import RoundButton from "./RoundButton";
@@ -44,7 +44,7 @@ export default function RequestForm({
     }
   }, [user]);
 
-  const open = useMemo(() => suppliers.filter((s) => s.availability), [suppliers]);
+  const open = useMemo(() => suppliers.filter(canOrder), [suppliers]); // open today and in stock
   const sup = open.find((s) => s.id === selectedId) || open[0];
   const total = sup ? (sup.price || 0) * qty + (sup.delivery_charge || 0) : 0;
 
@@ -73,7 +73,7 @@ export default function RequestForm({
     const digits = phone.replace(/\D/g, "").slice(-10);
     if (digits.length !== 10) return setErr("Enter a 10-digit phone number");
     if (!address.trim()) return setErr("Enter the delivery address");
-    if (!sup) return setErr("No supplier is available near this area yet");
+    if (!sup) return setErr("No shop near this area is open with jars in stock right now");
     if (!user) {
       openAuth({ phone: digits, message: "Sign in or create an account to send your request. We'll send it right after.", onDone: () => void send() });
       return;
@@ -103,7 +103,7 @@ export default function RequestForm({
           <label className="wf-label" htmlFor="rf-sup">Choose a supplier near {locLabel}</label>
           <div className="wf-select">
             <select id="rf-sup" className="wf-input" value={sup?.id ?? ""} onChange={(e) => onSelect(Number(e.target.value))} disabled={!open.length}>
-              {!open.length && <option value="">No suppliers available here</option>}
+              {!open.length && <option value="">No shop here is open with jars in stock right now</option>}
               {open.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.business_name} · {rupee(s.price)} {s.distance_km != null ? "· " + km(s.distance_km) : ""}
