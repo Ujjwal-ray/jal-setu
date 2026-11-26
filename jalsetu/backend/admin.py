@@ -10,6 +10,7 @@ from werkzeug.security import generate_password_hash
 
 from . import db
 from .auth import auth, issue_reset_code
+from .shop_hours import close_forgotten, day_start
 from .util import body, fail, normalize_phone, text
 
 bp = Blueprint("admin", __name__)
@@ -43,7 +44,8 @@ def overview():
                   active=sum(by_status.get(s, 0) for s in ("pending", "accepted", "out_for_delivery")))
 
     money = one(f"""SELECT COALESCE(SUM({ORDER_TOTAL}), 0) earned,
-        COALESCE(SUM(CASE WHEN COALESCE(o.delivered_at, o.ts) >= ? THEN {ORDER_TOTAL} END), 0) earned_this_month
+        COALESCE(SUM(CASE WHEN COALESCE(o.delivered_at, o.ts) >= ? THEN {ORDER_TOTAL} END), 0) earned_this_month,
+        COALESCE(SUM(CASE WHEN o.payment_status = 'paid' THEN o.service_fee END), 0) jalsetu_fees
         FROM orders o WHERE o.status = 'delivered'""", (_month_start(),))
 
     suppliers = one(f"""SELECT
@@ -52,14 +54,17 @@ def overview():
         (SELECT COUNT(*) FROM suppliers WHERE verified = 1) verified,
         (SELECT COUNT(*) FROM suppliers WHERE verified = 0) awaiting,
         (SELECT COUNT(*) FROM suppliers s JOIN products p ON p.supplier_id = s.id
-            WHERE s.verified = 1 AND p.availability = 1) in_stock,
+            WHERE s.verified = 1 AND p.availability = 1 AND EXISTS (SELECT 1 FROM shop_hours h
+                WHERE h.supplier_id = s.id AND h.closed IS NULL AND h.opened >= :today)) in_stock,
+        (SELECT COUNT(DISTINCT h.supplier_id) FROM shop_hours h JOIN suppliers s ON s.id = h.supplier_id
+            WHERE s.verified = 1 AND h.closed IS NULL AND h.opened >= :today) open_now,
         (SELECT COUNT(DISTINCT supplier_id) FROM orders WHERE status = 'out_for_delivery') delivering_now,
         (SELECT COUNT(DISTINCT supplier_id) FROM orders WHERE status IN {ACTIVE}) busy,
         (SELECT COUNT(DISTINCT u.id) FROM users u JOIN tokens t ON t.user_id = u.id
             WHERE u.role = 'supplier' AND t.expires > :now) signed_in,
         (SELECT COUNT(DISTINCT u.id) FROM users u JOIN tokens t ON t.user_id = u.id
             WHERE u.role = 'supplier' AND t.expires > :now AND u.last_seen >= :since) online""",
-                    {"now": now, "since": now - ONLINE_SECONDS})
+                    {"now": now, "since": now - ONLINE_SECONDS, "today": day_start()})
     suppliers["signed_out"] = suppliers["accounts"] - suppliers["signed_in"]
 
     fb = one("""SELECT COUNT(*) reviews, ROUND(AVG(rating), 1) rating,
@@ -77,8 +82,10 @@ def overview():
 @bp.get("/admin/suppliers")
 @auth("admin")
 def suppliers():
-    """Every listing (unverified first) with its owner's sign-in status, orders, earnings, ratings and reports."""
+    """Every listing (unverified first) with its owner's sign-in status, orders, earnings, ratings, reports,
+    and today's opening and closing (shop_hours.py)."""
     now = int(time.time())
+    close_forgotten()  # so shops left open overnight show up as such
     rows = db.query(f"""SELECT s.*, p.price, p.delivery_charge, p.availability, p.jar_size,
         u.name owner_name, u.phone owner_phone, u.last_seen,
         EXISTS (SELECT 1 FROM tokens t WHERE t.user_id = s.user_id AND t.expires > :now) signed_in,
@@ -93,9 +100,18 @@ def suppliers():
         (SELECT COUNT(*) FROM orders o WHERE o.supplier_id = s.id AND o.status = 'out_for_delivery') on_the_way,
         (SELECT COALESCE(SUM({ORDER_TOTAL}), 0) FROM orders o WHERE o.supplier_id = s.id AND o.status = 'delivered') earned,
         (SELECT COUNT(*) FROM reports rp JOIN orders o ON o.id = rp.order_id
-            WHERE o.supplier_id = s.id AND rp.status = 'open') open_reports
+            WHERE o.supplier_id = s.id AND rp.status = 'open') open_reports,
+        a.status aadhaar_status, a.name aadhaar_name, a.last4 aadhaar_last4, a.note aadhaar_note,
+        a.submitted aadhaar_submitted,
+        (SELECT h.opened FROM shop_hours h WHERE h.supplier_id = s.id AND h.closed IS NULL AND h.opened >= :today) open_since,
+        (SELECT MAX(h.closed) FROM shop_hours h WHERE h.supplier_id = s.id AND h.closed_by = 'owner'
+            AND h.closed >= :today) closed_today,
+        (SELECT COUNT(*) FROM shop_hours h WHERE h.supplier_id = s.id AND h.closed_by = 'auto'
+            AND h.closed > :week) left_open_nights,
+        (SELECT MAX(h.opened) FROM shop_hours h WHERE h.supplier_id = s.id AND h.closed_by = 'auto') last_left_open
         FROM suppliers s LEFT JOIN products p ON p.supplier_id = s.id LEFT JOIN users u ON u.id = s.user_id
-        ORDER BY s.verified, s.id DESC""", {"now": now})
+        LEFT JOIN aadhaar_checks a ON a.supplier_id = s.id
+        ORDER BY s.verified, s.id DESC""", {"now": now, "today": day_start(), "week": day_start() - 7 * 86400})
     for r in rows:
         r["signed_in"] = bool(r["signed_in"])
         r["online"] = r["signed_in"] and (r["last_seen"] or 0) >= now - ONLINE_SECONDS
@@ -136,6 +152,10 @@ def set_report_status(rid):
 @auth("admin")
 def verify(sid):
     verified = 1 if body().get("verified", True) else 0
+    # a shop is shown to customers only once an admin has seen who runs it (aadhaar.py). Shops verified before
+    # Aadhaar checks existed stay verified, but once hidden they need the check to come back.
+    if verified and not db.query("SELECT 1 FROM aadhaar_checks WHERE supplier_id = ? AND status = 'approved'", (sid,), one=True):
+        fail("Approve the owner's Aadhaar before verifying this shop", 409)
     if not db.execute("UPDATE suppliers SET verified = ? WHERE id = ?", (verified, sid)).rowcount:
         fail("Supplier not found", 404)
     return jsonify(ok=True, verified=verified)
