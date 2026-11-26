@@ -21,6 +21,8 @@ def create_app(config=None):
         TOKEN_TTL=30 * 24 * 3600,                               # sign-in lasts 30 days
         MAX_CONTENT_LENGTH=64 * 1024,
         SMS_PROVIDER=os.environ.get("JALSETU_SMS", "console"),  # see sms.py
+        VERIFY_PHONES=os.environ.get("JALSETU_VERIFY_PHONES", "1") != "0",  # sign-up needs the code texted to the phone
+        SMS_DAILY_LIMIT=int(os.environ.get("JALSETU_SMS_DAILY_LIMIT", "200")),  # texts per 24 hours, a cap on the SMS bill
     )
     app.config.update(config or {})
 
